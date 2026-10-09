@@ -1,0 +1,703 @@
+{
+  "project": {
+    "name": "Campus SOS",
+    "version": "1.0",
+    "purpose": "Master specification for generating the complete Campus SOS product documentation package.",
+    "generation_mode": "DOCUMENTATION_FIRST",
+    "implementation_status": "Generate the specification package first; do not implement the production application yet.",
+    "source_project": {
+      "file": "CampusSOS-master (2).zip",
+      "role": "functional reference only",
+      "must_not_copy": [
+        "existing UI",
+        "existing visual design",
+        "existing architecture",
+        "demo accounts",
+        "fake incidents",
+        "fake statistics",
+        "fake notifications",
+        "fake audit records"
+      ]
+    }
+  },
+  "global_rules": {
+    "preserve_every_requirement": true,
+    "do_not_silently_omit_or_reinterpret": true,
+    "if_ambiguous": "Document the ambiguity and propose a safe implementation rule without deleting the original requirement.",
+    "traceability": "Every requirement must be mapped to generated documentation.",
+    "validate_before_zip": true,
+    "no_fake_production_data": true
+  },
+  "product_principles": [
+    "Campus SOS is a campus safety and emergency-response platform, not a generic AI dashboard.",
+    "Emergency SOS is the highest-priority workflow for major immediate emergencies.",
+    "Report an Incident is for normal/non-immediate campus issues and concerns.",
+    "AI classifies and structures the report; deterministic routing rules decide teams and notification audiences.",
+    "Campus Administration has visibility into every incident.",
+    "Specialized teams receive relevant cases.",
+    "Sensitive incidents are not automatically broadcast to students.",
+    "Photos are evidence and are available to Campus Administration and all teams assigned to the incident.",
+    "Emergency workflows must remain operational when one external service or responder fails.",
+    "Frontend and backend are completely separated for maintainability.",
+    "Real/demo accounts are created only at the final stage."
+  ],
+  "reporting": {
+    "emergency_sos": {
+      "purpose": "Major campus emergencies such as serious fire hazards, major accidents, major blocked routes, serious security threats, major fights/quarrels, and other immediate emergencies.",
+      "flow": [
+        "Student selects Emergency SOS.",
+        "Emergency Assist asks what happened.",
+        "Student enters description.",
+        "Student may attach up to 2 photos.",
+        "Student selects a predefined campus location when useful.",
+        "Student places an exact pin on the uploaded static 2D campus map.",
+        "AI classifies the description.",
+        "Routing engine determines teams and notification audience.",
+        "Student sees a confirmation screen.",
+        "Student explicitly confirms the emergency.",
+        "Emergency is created.",
+        "Relevant teams/responders are notified.",
+        "Automatic responder assignment begins.",
+        "Student receives a live status screen."
+      ],
+      "priority": "Always the highest-priority emergency workflow.",
+      "student_priority_selection": false
+    },
+    "report_incident": {
+      "purpose": "Normal campus reports, complaints, concerns, and non-immediate incidents.",
+      "fields": [
+        "incident description",
+        "category",
+        "predefined campus location",
+        "exact map pin",
+        "optional maximum 2 photos"
+      ]
+    }
+  },
+  "location": {
+    "map_type": "Uploaded static 2D college campus map image",
+    "gps": "Not the primary location mechanism.",
+    "student": "Can tap/click the map to place the exact incident pin.",
+    "storage": "Store normalized relative X/Y coordinates so the pin remains accurate at different screen sizes.",
+    "admin_and_teams": "See the same exact pin.",
+    "explore": "Display incident pins on the same campus map.",
+    "predefined_locations": [
+      "room",
+      "classroom",
+      "laboratory",
+      "block",
+      "library",
+      "canteen",
+      "parking",
+      "ground",
+      "hostel",
+      "other"
+    ]
+  },
+  "photos": {
+    "maximum": 2,
+    "optional": true,
+    "usable_for": [
+      "fire hazard",
+      "blocked road/path",
+      "unknown person/security alert",
+      "accident",
+      "infrastructure hazard",
+      "other evidence-based incidents"
+    ],
+    "access": "Campus Administration and every team/person assigned to the incident.",
+    "not_public_by_default": true,
+    "unknown_person_workflow": {
+      "student_can_upload_photo": true,
+      "security_sees": [
+        "photo",
+        "description",
+        "map pin",
+        "time",
+        "category",
+        "status"
+      ],
+      "do_not_automatically_identify_person": true
+    }
+  },
+  "ai_and_routing": {
+    "ai_duties": [
+      "understand student description",
+      "classify category",
+      "extract structured information",
+      "produce structured routing input",
+      "provide reasoning/metadata for authorized personnel where appropriate"
+    ],
+    "ai_must_not": [
+      "invent campus authority policy",
+      "be the sole routing authority",
+      "automatically identify people from photographs",
+      "decide public disclosure of sensitive cases"
+    ],
+    "routing_engine": {
+      "deterministic_and_configurable": true,
+      "multi_team_assignment": true,
+      "fallback_if_ai_unavailable": "Use configured rule-based classification/routing fallback."
+    },
+    "routing_examples": {
+      "fire_or_fire_hazard": [
+        "Fire & Safety",
+        "Security",
+        "Campus Administration"
+      ],
+      "accident_or_medical": [
+        "Medical",
+        "Security when appropriate",
+        "Campus Administration"
+      ],
+      "fight_or_quarrel": [
+        "Security",
+        "Chief Proctor",
+        "Campus Administration"
+      ],
+      "teacher_misconduct": [
+        "Chief Proctor",
+        "Student Council when configured",
+        "Campus Administration"
+      ],
+      "student_misconduct": [
+        "Chief Proctor",
+        "Student Council when configured",
+        "Campus Administration"
+      ],
+      "women_harassment": [
+        "Women Safety/Women Club",
+        "Chief Proctor",
+        "Security if immediate danger",
+        "Campus Administration"
+      ],
+      "men_harassment": [
+        "Men Safety/Men Harassment Team",
+        "Chief Proctor",
+        "Security if immediate danger",
+        "Campus Administration"
+      ],
+      "unknown_person": [
+        "Security",
+        "Campus Administration"
+      ],
+      "blocked_route": [
+        "Transportation/Traffic",
+        "Security",
+        "Infrastructure & Facilities when appropriate",
+        "Campus Administration"
+      ],
+      "infrastructure_hazard": [
+        "Infrastructure & Facilities",
+        "Security when safety risk exists",
+        "Campus Administration"
+      ],
+      "cyber_or_digital": [
+        "IT/Digital Safety",
+        "Campus Administration",
+        "Chief Proctor when disciplinary"
+      ]
+    }
+  },
+  "notification_rules": {
+    "logged_in_users": "Can receive appropriate campus safety notifications when notifications are enabled.",
+    "campus_wide_when_relevant": [
+      "major fire",
+      "major fire hazard",
+      "major campus route blockage",
+      "major security threat",
+      "campus-wide safety danger",
+      "major environmental/safety hazard",
+      "event requiring students to avoid an area"
+    ],
+    "restricted_examples": [
+      "teacher misconduct",
+      "student misconduct",
+      "harassment",
+      "individual medical case",
+      "personal grievance",
+      "student-teacher dispute",
+      "disciplinary matter"
+    ],
+    "principle": "Notify people who need to act and people who need to know; do not notify people who should not receive the information.",
+    "sensitive_cases": "Never broadcast sensitive case details to all students by default."
+  },
+  "roles": {
+    "student": {
+      "interface": [
+        "Home",
+        "Emergency SOS",
+        "Emergency Assist",
+        "Report an Incident",
+        "Campus Explore",
+        "My Reports",
+        "Notifications",
+        "Emergency Contacts"
+      ],
+      "my_reports": {
+        "tabs": [
+          "Reports",
+          "Emergency SOS"
+        ],
+        "reports": "Normal incident submissions.",
+        "emergency_sos": "Emergency SOS submissions.",
+        "details": [
+          "status",
+          "assigned teams",
+          "timeline",
+          "location",
+          "category",
+          "relevant case information"
+        ]
+      },
+      "live_sos_status": [
+        "Emergency Created",
+        "Teams Notified",
+        "Responder Assigned",
+        "Responder On the Way",
+        "Responder At Location",
+        "Resolved"
+      ]
+    },
+    "campus_administration": {
+      "scope": "Everything on campus.",
+      "interface": [
+        "Overview",
+        "All Incidents",
+        "Active Emergencies/Dispatch",
+        "Resolved Incidents",
+        "Campus Map",
+        "Teams",
+        "Responders",
+        "User Directory",
+        "Analytics/Statistics",
+        "Notifications",
+        "Audit Trail",
+        "Settings"
+      ],
+      "full_incident_visibility": true
+    },
+    "chief_proctor": {
+      "scope": "Disciplinary/conduct matters.",
+      "receives": [
+        "student misconduct",
+        "teacher/staff misconduct",
+        "student-teacher disputes",
+        "fights",
+        "quarrels",
+        "harassment",
+        "other configured disciplinary cases"
+      ],
+      "should_not_receive_by_default": [
+        "routine medical cases",
+        "routine infrastructure cases",
+        "unrelated technical issues",
+        "unrelated transportation cases"
+      ]
+    },
+    "security": {
+      "scope": "Physical security.",
+      "receives": [
+        "unknown person",
+        "suspicious activity",
+        "unauthorized access",
+        "fights",
+        "security threats",
+        "campus safety alerts"
+      ]
+    },
+    "medical": {
+      "scope": "Medical emergencies and accidents.",
+      "receives": [
+        "collapse",
+        "injury",
+        "accident",
+        "illness",
+        "bee sting",
+        "other medical emergency"
+      ],
+      "first_aid": {
+        "enabled": true,
+        "rule": "Provide only conservative basic first-aid guidance while professional medical help is responding; never diagnose or delay professional care."
+      }
+    },
+    "fire_safety": {
+      "scope": "Fire and safety hazards."
+    },
+    "women_safety": {
+      "scope": "Women safety and women harassment.",
+      "restricted": true
+    },
+    "men_safety": {
+      "scope": "Men safety and men harassment.",
+      "restricted": true
+    },
+    "student_council": {
+      "scope": "Student grievances, welfare, and configured student-teacher/student-campus concerns."
+    },
+    "infrastructure_facilities": {
+      "scope": "Infrastructure, electrical, water, building, maintenance, and facility hazards."
+    },
+    "transportation": {
+      "scope": "Road blockage, transport, traffic, parking, vehicle incidents."
+    },
+    "it_digital_safety": {
+      "scope": "Cyber incidents, digital harassment, account/security, network/digital safety."
+    }
+  },
+  "dispatch": {
+    "mode": "Automatically assign a specific available responder and notify the relevant team.",
+    "states": {
+      "Available": "On duty and eligible for a new case.",
+      "Busy": "Handling an assigned case.",
+      "Offline": "Off duty/unavailable."
+    },
+    "example": "Dr. Mahika is assigned a medical case, becomes Busy, becomes Available after finishing, and is Offline when off duty.",
+    "fallback": [
+      "If a responder rejects or does not respond within a configured period, try another eligible responder.",
+      "If multiple responders are required, assign multiple responders.",
+      "If nobody is available, escalate to the relevant team coordinator/administration.",
+      "Team-level awareness remains active after individual assignment."
+    ],
+    "no_inactivity_auto_offline": true
+  },
+  "admin": {
+    "overview_cards": [
+      "Total Incidents",
+      "Active Emergencies",
+      "Resolved Incidents",
+      "Average Response Time",
+      "Incidents by Domain/Category"
+    ],
+    "click_actions": {
+      "Total Incidents": "Open all incident statistics/history including active and resolved cases.",
+      "Active Emergencies": "Open active incident dispatch page.",
+      "Resolved Incidents": "Open resolved incidents page.",
+      "Average Response Time": "Open detailed response analytics."
+    },
+    "category_analytics": true,
+    "incident_table": [
+      "ID",
+      "Type",
+      "Category",
+      "Priority/Workflow",
+      "Location",
+      "Status",
+      "Time",
+      "Action"
+    ],
+    "view_button": {
+      "required": true,
+      "must_show": [
+        "full student description",
+        "incident ID",
+        "report type",
+        "category",
+        "workflow",
+        "predefined location",
+        "exact map pin",
+        "date/time",
+        "authorized reporter information",
+        "AI classification",
+        "AI reasoning where appropriate",
+        "routing decision",
+        "assigned teams",
+        "assigned responders",
+        "photos",
+        "notification history",
+        "response timeline",
+        "status history",
+        "resolution details",
+        "audit history"
+      ]
+    }
+  },
+  "user_directory": {
+    "must_not_be": "A directory of every student's phone number.",
+    "include": [
+      "Campus SOS administrators",
+      "Campus SOS team members",
+      "responders",
+      "relevant department/team contacts"
+    ],
+    "fields": [
+      "name",
+      "department/team",
+      "designation",
+      "role",
+      "phone",
+      "email where appropriate",
+      "availability where appropriate"
+    ]
+  },
+  "campus_explore": {
+    "purpose": "Focused Campus Incident Explorer.",
+    "components": [
+      "static 2D campus map",
+      "incident pins",
+      "recent campus incidents",
+      "status",
+      "recent campus activity"
+    ],
+    "remove": [
+      "urgency filter",
+      "Low/Medium/High urgency system",
+      "generic system urgency filter",
+      "unnecessary response protocol section",
+      "generic AI distress-analysis marketing section"
+    ],
+    "privacy": "Sensitive incidents are sanitized or excluded according to access permissions."
+  },
+  "homepage": {
+    "rebuild_from_scratch": true,
+    "primary_actions": [
+      "Emergency SOS",
+      "Report an Incident"
+    ],
+    "sections": [
+      "primary actions",
+      "on-duty teams",
+      "recent campus activity",
+      "emergency contacts",
+      "appropriate safety notifications"
+    ],
+    "remove": [
+      "generic Live Campus Dispatch section",
+      "generic AI marketing",
+      "fake statistics",
+      "fake activity",
+      "fake operational data"
+    ],
+    "emergency_hotlines": "Configurable 24/7 campus emergency contacts."
+  },
+  "ui_ux": {
+    "from_scratch": true,
+    "quality": [
+      "clean",
+      "elegant",
+      "modern",
+      "professional",
+      "minimal",
+      "interactive where useful",
+      "clear visual hierarchy",
+      "consistent spacing",
+      "consistent typography",
+      "purposeful motion",
+      "accessible",
+      "mobile-first",
+      "responsive",
+      "fast",
+      "uncluttered"
+    ],
+    "avoid": [
+      "generic AI dashboard",
+      "excessive gradients",
+      "excessive glassmorphism",
+      "unnecessary cards",
+      "visual clutter",
+      "decorative emergency distractions",
+      "inconsistent components",
+      "fake metrics",
+      "template-like AI UI"
+    ],
+    "mobile_priority": [
+      "Emergency SOS",
+      "Emergency Assist",
+      "map pinning",
+      "photo upload",
+      "notifications",
+      "live SOS status",
+      "My Reports"
+    ],
+    "role_rule": "Each role has its own purpose-built interface rather than one generic dashboard with random widgets hidden."
+  },
+  "audit": {
+    "required": true,
+    "events": [
+      "incident created",
+      "SOS confirmed",
+      "AI classification",
+      "routing decision",
+      "notification sent",
+      "responder assigned",
+      "responder accepted",
+      "responder rejected",
+      "reassignment",
+      "status changes",
+      "resolution",
+      "admin actions",
+      "team assignment changes",
+      "relevant permission/access events"
+    ],
+    "timeline": "Chronological case history visible to authorized personnel."
+  },
+  "security_privacy": {
+    "required": [
+      "role-based access control",
+      "team-based authorization",
+      "incident-level access",
+      "secure photo storage",
+      "audit logging",
+      "secure authentication",
+      "least privilege",
+      "privacy-aware notification rules",
+      "no public sensitive incident details"
+    ]
+  },
+  "frontend_backend": {
+    "required": true,
+    "structure": {
+      "frontend": "Independent application.",
+      "backend": "Independent application.",
+      "docs": "Separate documentation directory.",
+      "contracts": "Documented API/data contracts between frontend and backend."
+    },
+    "goal": "A second developer should be able to locate UI, API, AI, routing, notifications, dispatch, database, authentication, and audit code without navigating an unstructured monolith."
+  },
+  "accounts": {
+    "current_phase": "Build all interfaces and role architecture now.",
+    "temporary_preview": "Use development-only role switching/mocking if required to preview each role.",
+    "real_accounts": "Create at the end after the user provides final names, teams, contacts, duty statuses, and roles.",
+    "demo_data": "Do not seed fake production data during foundational development."
+  },
+  "required_output_files": [
+    [
+      "docs/PRD.md",
+      "Complete product requirements, scope, personas, workflows, requirements, acceptance criteria."
+    ],
+    [
+      "docs/TECH_STACK.md",
+      "Frontend, backend, database, auth, AI, realtime, notification, storage, testing, deployment, observability."
+    ],
+    [
+      "docs/ARCHITECTURE.md",
+      "Complete system architecture, module boundaries, data flows, security, realtime, AI/routing, dispatch, notification architecture, Mermaid diagrams."
+    ],
+    [
+      "docs/DATABASE_SCHEMA.md",
+      "Entities, fields, types, constraints, relationships, indexes, permissions, statuses, incidents, attachments, map coordinates, notifications, assignments, audit."
+    ],
+    [
+      "docs/API_SPECIFICATION.md",
+      "All API endpoints, authentication, authorization, requests, responses, validation, errors, pagination, file uploads, realtime events."
+    ],
+    [
+      "docs/UI_UX_SPECIFICATION.md",
+      "Complete from-scratch design system and all role-specific screens, navigation, components, responsive/mobile behavior, states and interactions."
+    ],
+    [
+      "docs/AI_ROUTING_SPECIFICATION.md",
+      "AI input/output contract, taxonomy, routing matrix, audience matrix, fallback, escalation, multi-team rules, test cases."
+    ],
+    [
+      "docs/IMPLEMENTATION_PLAN.md",
+      "Phased Antigravity build plan, dependencies, milestones, testing gates, integration, UI review, final account phase."
+    ],
+    [
+      "docs/REQUIREMENTS_TRACEABILITY.md",
+      "Every requirement ID mapped to exact documentation sections with validation status."
+    ],
+    [
+      "README.md",
+      "Master index and instructions for using all generated documentation."
+    ]
+  ],
+  "implementation_sequence": [
+    "Architecture and contracts",
+    "Database and security model",
+    "Authentication and role model",
+    "All role interfaces",
+    "Student Emergency SOS",
+    "Student Report Incident",
+    "Campus static map and pinning",
+    "Photo upload/storage/access",
+    "AI classification",
+    "Deterministic routing",
+    "Automatic responder dispatch",
+    "Responder availability",
+    "Notifications",
+    "Admin incident management",
+    "Campus Explore",
+    "Analytics",
+    "Audit trail",
+    "Security/privacy hardening",
+    "Mobile/responsive polish",
+    "Testing",
+    "Real campus/team configuration",
+    "Demo accounts and demo data last"
+  ],
+  "future_inputs": [
+    "actual college 2D campus map",
+    "Campus SOS team member names",
+    "administrator details",
+    "responder details",
+    "department/team assignments",
+    "duty schedules",
+    "emergency hotline numbers",
+    "final college routing policies",
+    "final demo account list"
+  ],
+  "final_validation": [
+    "Every confirmed feature is documented.",
+    "Every role has a dedicated interface specification.",
+    "All 10 required documentation files exist.",
+    "Every requirement is traceable.",
+    "Emergency SOS confirmation flow is documented.",
+    "Normal incident flow is documented.",
+    "Live student SOS status is documented.",
+    "My Reports has separate Reports and Emergency SOS views.",
+    "Static 2D map and exact pinning are documented.",
+    "Maximum two photos are documented.",
+    "Photo permissions are documented.",
+    "Unknown-person security photo workflow is documented.",
+    "AI classification and deterministic routing are documented.",
+    "Multi-team assignment is documented.",
+    "Automatic responder assignment is documented.",
+    "Available/Busy/Offline states are documented.",
+    "Responder fallback/reassignment is documented.",
+    "Campus-wide versus restricted notifications are documented.",
+    "Admin View Incident exposes the complete student description and case details.",
+    "User Directory contains Campus SOS personnel/responders rather than a student phone directory.",
+    "Audit trail is documented.",
+    "Clickable analytics cards are documented.",
+    "Campus Explore redesign is documented.",
+    "Homepage redesign is documented.",
+    "Mobile-first UI is documented.",
+    "Frontend/backend separation is documented.",
+    "Demo accounts are explicitly deferred to the end.",
+    "Existing UI is explicitly not reused.",
+    "Unnecessary urgency filters are explicitly removed."
+  ],
+  "zip_output": {
+    "filename": "campus_sos_specification_package.zip",
+    "must_contain": "Every required output file plus this JSON source specification.",
+    "source_json_destination": "docs/CAMPUS_SOS_MASTER_GENERATION_SPEC.json",
+    "no_missing_files": true,
+    "no_unrequested_clutter": true
+  },
+  "requirement_id_groups": {
+    "REQ-G-001": "project",
+    "REQ-G-002": "global_rules",
+    "REQ-G-003": "product_principles",
+    "REQ-G-004": "reporting",
+    "REQ-G-005": "location",
+    "REQ-G-006": "photos",
+    "REQ-G-007": "ai_and_routing",
+    "REQ-G-008": "notification_rules",
+    "REQ-G-009": "roles",
+    "REQ-G-010": "dispatch",
+    "REQ-G-011": "admin",
+    "REQ-G-012": "user_directory",
+    "REQ-G-013": "campus_explore",
+    "REQ-G-014": "homepage",
+    "REQ-G-015": "ui_ux",
+    "REQ-G-016": "audit",
+    "REQ-G-017": "security_privacy",
+    "REQ-G-018": "frontend_backend",
+    "REQ-G-019": "accounts",
+    "REQ-G-020": "required_output_files",
+    "REQ-G-021": "implementation_sequence",
+    "REQ-G-022": "future_inputs",
+    "REQ-G-023": "final_validation"
+  }
+}

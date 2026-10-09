@@ -1,0 +1,29 @@
+import { BreakGlassScope, BreakGlassStatus, BreakGlassType, SupervisorReviewStatus } from '@prisma/client';
+
+export const BREAK_GLASS_DEFAULT_DURATION_MINUTES = 60;
+export const BREAK_GLASS_CRITICAL_DURATION_MINUTES = 30;
+export const BREAK_GLASS_MAX_DURATION_MINUTES = 240;
+export const BREAK_GLASS_MIN_DURATION_MINUTES = 5;
+
+export const ALL_BREAK_GLASS_SCOPES: BreakGlassScope[] = [
+  'INCIDENT_VIEW',
+  'LOCATION_VIEW',
+  'EVIDENCE_VIEW',
+  'REPORTER_CONTACT_VIEW',
+  'REALTIME_ACCESS',
+  'INCIDENT_UPDATE',
+  'TEMPORARY_TEAM_ASSIGNMENT',
+];
+
+export const VALID_BREAK_GLASS_STATUS_TRANSITIONS: Record<BreakGlassStatus, BreakGlassStatus[]> = {
+  REQUESTED: ['APPROVED', 'ACTIVE', 'REJECTED'],
+  APPROVED: ['ACTIVE', 'REVOKED', 'EXPIRED'],
+  ACTIVE: ['EXPIRED', 'REVOKED'],
+  EXPIRED: [],
+  REVOKED: [],
+  REJECTED: [],
+  REVIEW_REQUIRED: ['REVIEWED'],
+  REVIEWED: [],
+};
+
+export const SUPERVISOR_ROLES = ['CAMPUS_ADMIN', 'CHIEF_PROCTOR'];

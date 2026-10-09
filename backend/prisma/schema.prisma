@@ -1,0 +1,760 @@
+// Campus SOS — Prisma Schema
+// PostgreSQL 16. UUID v7 PKs, timestamptz, snake_case.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [citext]
+}
+
+// ── Enums ──────────────────────────────────────────────────────────────
+
+enum UserRole {
+  STUDENT
+  CAMPUS_ADMIN
+  CHIEF_PROCTOR
+  SECURITY
+  MEDICAL
+  FIRE_SAFETY
+  WOMEN_SAFETY
+  MEN_SAFETY
+  STUDENT_COUNCIL
+  INFRASTRUCTURE
+  TRANSPORTATION
+  IT_DIGITAL
+}
+
+enum UserType {
+  student
+  staff
+  personnel
+}
+
+enum WorkflowType {
+  EMERGENCY_SOS
+  STANDARD_REPORT
+}
+
+enum IncidentStatus {
+  DRAFT
+  CREATED
+  TEAMS_NOTIFIED
+  RESPONDER_ASSIGNED
+  RESPONDER_ON_THE_WAY
+  RESPONDER_AT_LOCATION
+  RESOLVED
+  REOPENED
+  CANCELLED
+}
+
+enum DutyState {
+  AVAILABLE
+  BUSY
+  OFFLINE
+}
+
+enum AssignmentStatus {
+  OFFERED
+  ACCEPTED
+  REJECTED
+  TIMED_OUT
+  CANCELLED
+  EN_ROUTE
+  ON_SCENE
+  COMPLETED
+}
+
+enum LocationKind {
+  ROOM
+  CLASSROOM
+  LABORATORY
+  BLOCK
+  LIBRARY
+  CANTEEN
+  PARKING
+  GROUND
+  HOSTEL
+  OTHER
+}
+
+enum ClassSource {
+  AI
+  RULE_FALLBACK
+  STUDENT
+  ADMIN_OVERRIDE
+}
+
+enum AudienceType {
+  ACT
+  KNOW
+  REPORTER
+  CAMPUS_WIDE
+  AREA
+}
+
+enum Channel {
+  IN_APP
+  PUSH
+  SMS
+  VOICE
+  EMAIL
+}
+
+enum DeliveryStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  SKIPPED
+}
+
+enum NoticeStatus {
+  DRAFT
+  PENDING_APPROVAL
+  PUBLISHED
+  REJECTED
+  WITHDRAWN
+}
+
+enum AuditEventType {
+  INCIDENT_CREATED
+  SOS_CONFIRMED
+  AI_CLASSIFICATION
+  ROUTING_DECISION
+  NOTIFICATION_SENT
+  RESPONDER_ASSIGNED
+  RESPONDER_ACCEPTED
+  RESPONDER_REJECTED
+  REASSIGNED
+  STATUS_CHANGED
+  RESOLVED
+  ADMIN_ACTION
+  TEAM_ASSIGNMENT_CHANGED
+  ACCESS_EVENT
+  ACCESS_RESTRICTED_CASE
+  PHOTO_VIEWED
+  AI_FALLBACK_USED
+  ESCALATED
+  DUTY_STATE_CHANGED
+  BREAK_GLASS_REQUESTED
+  BREAK_GLASS_APPROVED
+  BREAK_GLASS_REJECTED
+  BREAK_GLASS_ACTIVATED
+  BREAK_GLASS_EXPIRED
+  BREAK_GLASS_REVOKED
+  BREAK_GLASS_REVIEW_REQUIRED
+  BREAK_GLASS_REVIEWED
+}
+
+enum BreakGlassScope {
+  INCIDENT_VIEW
+  LOCATION_VIEW
+  EVIDENCE_VIEW
+  REPORTER_CONTACT_VIEW
+  REALTIME_ACCESS
+  INCIDENT_UPDATE
+  TEMPORARY_TEAM_ASSIGNMENT
+}
+
+enum BreakGlassStatus {
+  REQUESTED
+  APPROVED
+  ACTIVE
+  EXPIRED
+  REVOKED
+  REJECTED
+  REVIEW_REQUIRED
+  REVIEWED
+}
+
+enum BreakGlassType {
+  NORMAL_OVERRIDE
+  CRITICAL_BREAK_GLASS
+}
+
+enum SupervisorReviewStatus {
+  NOT_REQUIRED
+  REVIEW_REQUIRED
+  REVIEWED
+  FLAGGED
+}
+
+// ── Models ─────────────────────────────────────────────────────────────
+
+model User {
+  id                   String    @id @default(uuid()) @db.Uuid
+  userType             UserType  @map("user_type")
+  role                 UserRole
+  fullName             String    @map("full_name")
+  email                String    @unique @db.Citext
+  phone                String?
+  passwordHash         String?   @map("password_hash")
+  ssoSubject           String?   @unique @map("sso_subject")
+  mfaEnabled           Boolean   @default(false) @map("mfa_enabled")
+  mfaSecret            String?   @map("mfa_secret")
+  notificationsEnabled Boolean   @default(true) @map("notifications_enabled")
+  isActive             Boolean   @default(true) @map("is_active")
+  lastLoginAt          DateTime? @map("last_login_at") @db.Timestamptz
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt            DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  teamMembers          TeamMember[]
+  reportedIncidents    Incident[]           @relation("IncidentReporter")
+  createdIncidents     Incident[]           @relation("IncidentCreator")
+  incidentDrafts       IncidentDraft[]
+  attachments          Attachment[]
+  notifications        Notification[]
+  pushSubscriptions    PushSubscription[]
+  sessions             Session[]
+  auditEventsAsActor   AuditEvent[]         @relation("AuditActor")
+  uploadedMaps         CampusMap[]
+  dutyStateChanges     ResponderProfile[]   @relation("DutyStateChanger")
+  breakGlassRequestsAsRequester BreakGlassRequest[] @relation("BreakGlassRequester")
+  breakGlassRequestsAsApprover  BreakGlassRequest[] @relation("BreakGlassApprover")
+  breakGlassRequestsAsRevoker   BreakGlassRequest[] @relation("BreakGlassRevoker")
+  breakGlassRequestsAsReviewer  BreakGlassRequest[] @relation("BreakGlassReviewer")
+
+  @@index([role])
+  @@index([userType])
+  @@map("users")
+}
+
+model Team {
+  id                          String    @id @default(uuid()) @db.Uuid
+  code                        String    @unique
+  name                        String
+  isRestricted                Boolean   @default(false) @map("is_restricted")
+  isEnabled                   Boolean   @default(true) @map("is_enabled")
+  assignmentMode              String    @default("AUTO_ASSIGN") @map("assignment_mode")
+  offerTimeoutSosSeconds      Int       @default(45) @map("offer_timeout_sos_seconds")
+  offerTimeoutStandardSeconds Int       @default(600) @map("offer_timeout_standard_seconds")
+  sosParallelOffer            Boolean   @default(true) @map("sos_parallel_offer")
+  allowBusyOverrideForSos     Boolean   @default(false) @map("allow_busy_override_for_sos")
+  coordinatorMemberId         String?   @map("coordinator_member_id") @db.Uuid
+
+  // Relations
+  members      TeamMember[]
+  incidentTeams IncidentTeam[]
+  assignments  Assignment[]
+
+  @@map("teams")
+}
+
+model TeamMember {
+  id                String    @id @default(uuid()) @db.Uuid
+  teamId            String    @map("team_id") @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  designation       String?
+  isCoordinator     Boolean   @default(false) @map("is_coordinator")
+  canViewRestricted Boolean   @default(false) @map("can_view_restricted")
+  isDirectoryVisible Boolean  @default(true) @map("is_directory_visible")
+  joinedAt          DateTime  @default(now()) @map("joined_at") @db.Timestamptz
+  leftAt            DateTime? @map("left_at") @db.Timestamptz
+
+  // Relations
+  team              Team              @relation(fields: [teamId], references: [id])
+  user              User              @relation(fields: [userId], references: [id])
+  responderProfile  ResponderProfile?
+  assignments       Assignment[]
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([teamId])
+  @@map("team_members")
+}
+
+model ResponderProfile {
+  memberId               String    @id @map("member_id") @db.Uuid
+  dutyState              DutyState @default(OFFLINE) @map("duty_state")
+  dutyStateChangedAt     DateTime? @map("duty_state_changed_at") @db.Timestamptz
+  dutyStateChangedBy     String?   @map("duty_state_changed_by") @db.Uuid
+  changeReason           String?   @map("change_reason")
+  skills                 String[]  @default([])
+  lastAssignedAt         DateTime? @map("last_assigned_at") @db.Timestamptz
+  currentAssignmentCount Int       @default(0) @map("current_assignment_count")
+  pushSubscriptionIds    String[]  @default([]) @map("push_subscription_ids") @db.Uuid
+  smsPhone               String?   @map("sms_phone")
+
+  // Relations
+  member                 TeamMember @relation(fields: [memberId], references: [id])
+  changedBy              User?      @relation("DutyStateChanger", fields: [dutyStateChangedBy], references: [id])
+
+  @@index([dutyState])
+  @@map("responder_profiles")
+}
+
+model DutySchedule {
+  id         String    @id @default(uuid()) @db.Uuid
+  memberId   String    @map("member_id") @db.Uuid
+  startsAt   DateTime  @map("starts_at") @db.Timestamptz
+  endsAt     DateTime  @map("ends_at") @db.Timestamptz
+  recurrence String?
+  createdBy  String    @map("created_by") @db.Uuid
+
+  @@map("duty_schedules")
+}
+
+model CampusMap {
+  id         String    @id @default(uuid()) @db.Uuid
+  name       String
+  storageKey String    @map("storage_key")
+  widthPx    Int       @map("width_px")
+  heightPx   Int       @map("height_px")
+  isActive   Boolean   @default(false) @map("is_active")
+  uploadedBy String    @map("uploaded_by") @db.Uuid
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  uploader            User                @relation(fields: [uploadedBy], references: [id])
+  predefinedLocations PredefinedLocation[]
+  incidentLocations   IncidentLocation[]
+
+  @@map("campus_maps")
+}
+
+model PredefinedLocation {
+  id       String       @id @default(uuid()) @db.Uuid
+  mapId    String       @map("map_id") @db.Uuid
+  kind     LocationKind
+  name     String
+  anchorX  Decimal?     @map("anchor_x") @db.Decimal(7, 6)
+  anchorY  Decimal?     @map("anchor_y") @db.Decimal(7, 6)
+  isActive Boolean      @default(true) @map("is_active")
+
+  // Relations
+  map               CampusMap          @relation(fields: [mapId], references: [id])
+  incidentLocations IncidentLocation[]
+
+  @@index([mapId, kind])
+  @@map("predefined_locations")
+}
+
+model Incident {
+  id                    String         @id @default(uuid()) @db.Uuid
+  publicId              String         @unique @map("public_id")
+  workflow              WorkflowType
+  reporterId            String         @map("reporter_id") @db.Uuid
+  createdById           String         @map("created_by_id") @db.Uuid
+  description           String
+  studentCategory       String?        @map("student_category")
+  finalCategory         String         @default("OTHER") @map("final_category")
+  status                IncidentStatus @default(CREATED)
+  isRestricted          Boolean        @default(false) @map("is_restricted")
+  immediateDanger       Boolean        @default(false) @map("immediate_danger")
+  campusWideEligible    Boolean        @default(false) @map("campus_wide_eligible")
+  exploreVisible        Boolean        @default(false) @map("explore_visible")
+  confirmedAt           DateTime?      @map("confirmed_at") @db.Timestamptz
+  createdAt             DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  firstTeamNotifiedAt   DateTime?      @map("first_team_notified_at") @db.Timestamptz
+  firstAcceptedAt       DateTime?      @map("first_accepted_at") @db.Timestamptz
+  responderArrivedAt    DateTime?      @map("responder_arrived_at") @db.Timestamptz
+  resolvedAt            DateTime?      @map("resolved_at") @db.Timestamptz
+  resolutionSummary     String?        @map("resolution_summary")
+  resolutionCode        String?        @map("resolution_code")
+  idempotencyKey        String?        @unique @map("idempotency_key")
+  isDrill               Boolean        @default(false) @map("is_drill")
+
+  // Relations
+  reporter              User                   @relation("IncidentReporter", fields: [reporterId], references: [id])
+  createdBy             User                   @relation("IncidentCreator", fields: [createdById], references: [id])
+  location              IncidentLocation?
+  attachments           Attachment[]
+  aiClassifications     AiClassification[]
+  routingDecisions      RoutingDecision[]
+  incidentTeams         IncidentTeam[]
+  assignments           Assignment[]
+  statusHistory         IncidentStatusHistory[]
+  notifications         Notification[]
+  campusNotices         CampusNotice[]
+  auditEvents           AuditEvent[]
+  breakGlassRequests    BreakGlassRequest[]
+
+  @@index([status])
+  @@index([workflow, status])
+  @@index([finalCategory])
+  @@index([reporterId, createdAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@map("incidents")
+}
+
+model IncidentDraft {
+  id                    String       @id @default(uuid()) @db.Uuid
+  reporterId            String       @map("reporter_id") @db.Uuid
+  workflow              WorkflowType
+  payload               Json
+  classificationPreview Json?        @map("classification_preview")
+  routingPreview        Json?        @map("routing_preview")
+  expiresAt             DateTime     @map("expires_at") @db.Timestamptz
+  createdAt             DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  reporter              User         @relation(fields: [reporterId], references: [id])
+  attachments           Attachment[]
+
+  @@map("incident_drafts")
+}
+
+model IncidentLocation {
+  incidentId            String              @id @map("incident_id") @db.Uuid
+  mapId                 String?             @map("map_id") @db.Uuid
+  predefinedLocationId  String?             @map("predefined_location_id") @db.Uuid
+  locationKind          LocationKind?       @map("location_kind")
+  locationText          String?             @map("location_text")
+  pinX                  Decimal?            @map("pin_x") @db.Decimal(7, 6)
+  pinY                  Decimal?            @map("pin_y") @db.Decimal(7, 6)
+  gpsLat                Decimal?            @map("gps_lat") @db.Decimal(9, 6)
+  gpsLng                Decimal?            @map("gps_lng") @db.Decimal(9, 6)
+
+  // Relations
+  incident              Incident            @relation(fields: [incidentId], references: [id])
+  map                   CampusMap?          @relation(fields: [mapId], references: [id])
+  predefinedLocation    PredefinedLocation? @relation(fields: [predefinedLocationId], references: [id])
+
+  @@map("incident_locations")
+}
+
+model Attachment {
+  id          String    @id @default(uuid()) @db.Uuid
+  incidentId  String?   @map("incident_id") @db.Uuid
+  draftId     String?   @map("draft_id") @db.Uuid
+  uploaderId  String    @map("uploader_id") @db.Uuid
+  storageKey  String    @map("storage_key")
+  mimeType    String    @map("mime_type")
+  sizeBytes   Int       @map("size_bytes")
+  widthPx     Int?      @map("width_px")
+  heightPx    Int?      @map("height_px")
+  sha256      String?
+  scanStatus  String    @default("PENDING") @map("scan_status")
+  position    Int
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  incident    Incident?       @relation(fields: [incidentId], references: [id])
+  draft       IncidentDraft?  @relation(fields: [draftId], references: [id])
+  uploader    User            @relation(fields: [uploaderId], references: [id])
+
+  @@unique([incidentId, position])
+  @@map("attachments")
+}
+
+model AiClassification {
+  id              String      @id @default(uuid()) @db.Uuid
+  incidentId      String      @map("incident_id") @db.Uuid
+  source          ClassSource
+  model           String?
+  promptVersion   String?     @map("prompt_version")
+  inputSnapshot   Json        @map("input_snapshot")
+  output          Json
+  category        String
+  confidence      Decimal     @db.Decimal(4, 3)
+  immediateDanger Boolean     @map("immediate_danger")
+  reasoning       String?
+  latencyMs       Int         @map("latency_ms")
+  createdAt       DateTime    @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  incident        Incident          @relation(fields: [incidentId], references: [id])
+  routingDecisions RoutingDecision[]
+
+  @@index([incidentId, createdAt(sort: Desc)])
+  @@map("ai_classifications")
+}
+
+model RoutingDecision {
+  id               String    @id @default(uuid()) @db.Uuid
+  incidentId       String    @map("incident_id") @db.Uuid
+  classificationId String    @map("classification_id") @db.Uuid
+  configVersion    Int       @map("config_version")
+  matchedRules     String[]  @map("matched_rules")
+  teams            Json
+  restrictions     Json
+  audience         Json
+  flags            String[]
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  incident         Incident         @relation(fields: [incidentId], references: [id])
+  classification   AiClassification @relation(fields: [classificationId], references: [id])
+
+  @@map("routing_decisions")
+}
+
+model IncidentTeam {
+  incidentId String    @map("incident_id") @db.Uuid
+  teamId     String    @map("team_id") @db.Uuid
+  role       String    // ACT or KNOW
+  grantedBy  String    @map("granted_by") // ROUTING or ADMIN
+  grantedAt  DateTime  @default(now()) @map("granted_at") @db.Timestamptz
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz
+
+  // Relations
+  incident   Incident @relation(fields: [incidentId], references: [id])
+  team       Team     @relation(fields: [teamId], references: [id])
+
+  @@id([incidentId, teamId])
+  @@index([teamId, revokedAt])
+  @@map("incident_teams")
+}
+
+model Assignment {
+  id                String           @id @default(uuid()) @db.Uuid
+  incidentId        String           @map("incident_id") @db.Uuid
+  teamId            String           @map("team_id") @db.Uuid
+  memberId          String           @map("member_id") @db.Uuid
+  status            AssignmentStatus @default(OFFERED)
+  offeredAt         DateTime         @default(now()) @map("offered_at") @db.Timestamptz
+  respondedAt       DateTime?        @map("responded_at") @db.Timestamptz
+  expiresAt         DateTime         @map("expires_at") @db.Timestamptz
+  acceptedAt        DateTime?        @map("accepted_at") @db.Timestamptz
+  enRouteAt         DateTime?        @map("en_route_at") @db.Timestamptz
+  onSceneAt         DateTime?        @map("on_scene_at") @db.Timestamptz
+  completedAt       DateTime?        @map("completed_at") @db.Timestamptz
+  rejectReason      String?          @map("reject_reason")
+  attemptNo         Int              @default(1) @map("attempt_no")
+  slotNo            Int              @default(1) @map("slot_no")
+  assignedBy        String           @default("AUTO") @map("assigned_by")
+
+  // Relations
+  incident          Incident         @relation(fields: [incidentId], references: [id])
+  team              Team             @relation(fields: [teamId], references: [id])
+  member            TeamMember       @relation(fields: [memberId], references: [id])
+
+  @@index([incidentId])
+  @@index([memberId, status])
+  @@index([status, expiresAt])
+  @@map("assignments")
+}
+
+model IncidentStatusHistory {
+  id         String    @id @default(uuid()) @db.Uuid
+  incidentId String    @map("incident_id") @db.Uuid
+  fromStatus String?   @map("from_status")
+  toStatus   String    @map("to_status")
+  changedBy  String    @map("changed_by")
+  note       String?
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  incident   Incident  @relation(fields: [incidentId], references: [id])
+
+  @@index([incidentId, createdAt])
+  @@map("incident_status_history")
+}
+
+model Notification {
+  id              String        @id @default(uuid()) @db.Uuid
+  incidentId      String?       @map("incident_id") @db.Uuid
+  audienceType    AudienceType  @map("audience_type")
+  recipientUserId String?       @map("recipient_user_id") @db.Uuid
+  noticeId        String?       @map("notice_id") @db.Uuid
+  title           String
+  body            String
+  payload         Json?
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  readAt          DateTime?     @map("read_at") @db.Timestamptz
+
+  // Relations
+  incident        Incident?              @relation(fields: [incidentId], references: [id])
+  recipient       User?                  @relation(fields: [recipientUserId], references: [id])
+  notice          CampusNotice?          @relation(fields: [noticeId], references: [id])
+  deliveries      NotificationDelivery[]
+
+  @@index([recipientUserId, createdAt(sort: Desc)])
+  @@index([incidentId])
+  @@map("notifications")
+}
+
+model NotificationDelivery {
+  id                String         @id @default(uuid()) @db.Uuid
+  notificationId    String         @map("notification_id") @db.Uuid
+  channel           Channel
+  status            DeliveryStatus @default(QUEUED)
+  providerMessageId String?        @map("provider_message_id")
+  attempt           Int            @default(1)
+  errorCode         String?        @map("error_code")
+  sentAt            DateTime?      @map("sent_at") @db.Timestamptz
+  deliveredAt       DateTime?      @map("delivered_at") @db.Timestamptz
+
+  // Relations
+  notification      Notification   @relation(fields: [notificationId], references: [id])
+
+  @@index([notificationId])
+  @@index([status])
+  @@map("notification_deliveries")
+}
+
+model CampusNotice {
+  id              String       @id @default(uuid()) @db.Uuid
+  incidentId      String?      @map("incident_id") @db.Uuid
+  status          NoticeStatus @default(DRAFT)
+  title           String
+  sanitizedBody   String       @map("sanitized_body")
+  areaText        String?      @map("area_text")
+  startsAt        DateTime?    @map("starts_at") @db.Timestamptz
+  endsAt          DateTime?    @map("ends_at") @db.Timestamptz
+  draftedBy       String       @map("drafted_by")
+  approvedBy      String?      @map("approved_by") @db.Uuid
+  approvedAt      DateTime?    @map("approved_at") @db.Timestamptz
+  autoPublished   Boolean      @default(false) @map("auto_published")
+  category        String?
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  incident        Incident?      @relation(fields: [incidentId], references: [id])
+  notifications   Notification[]
+
+  @@map("campus_notices")
+}
+
+model RoutingRule {
+  id          String  @id @default(uuid()) @db.Uuid
+  ruleId      String  @map("rule_id")
+  version     Int     @default(1)
+  enabled     Boolean @default(true)
+  priority    Int
+  condition   Json
+  actions     Json
+  description String?
+  updatedBy   String? @map("updated_by") @db.Uuid
+
+  @@map("routing_rules")
+}
+
+model Hotline {
+  id          String  @id @default(uuid()) @db.Uuid
+  label       String
+  phone       String
+  description String?
+  sortOrder   Int     @default(0) @map("sort_order")
+  is24x7      Boolean @default(false) @map("is_24x7")
+  isActive    Boolean @default(true) @map("is_active")
+
+  @@map("hotlines")
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedBy String?  @map("updated_by") @db.Uuid
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz
+
+  @@map("settings")
+}
+
+model AuditEvent {
+  id            BigInt         @id @default(autoincrement())
+  occurredAt    DateTime       @default(now()) @map("occurred_at") @db.Timestamptz
+  eventType     AuditEventType @map("event_type")
+  incidentId    String?        @map("incident_id") @db.Uuid
+  actorUserId   String?        @map("actor_user_id") @db.Uuid
+  actorKind     String         @map("actor_kind") // USER, SYSTEM, AI, WORKER
+  targetType    String?        @map("target_type")
+  targetId      String?        @map("target_id")
+  details       Json?
+  ipAddress     String?        @map("ip_address")
+  prevHash      Bytes?         @map("prev_hash")
+  hash          Bytes?
+
+  // Relations
+  incident      Incident? @relation(fields: [incidentId], references: [id])
+  actor         User?     @relation("AuditActor", fields: [actorUserId], references: [id])
+
+  @@index([incidentId, occurredAt])
+  @@index([eventType, occurredAt])
+  @@map("audit_events")
+}
+
+model PushSubscription {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  endpoint   String
+  keys       Json
+  platform   String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz
+
+  // Relations
+  user       User @relation(fields: [userId], references: [id])
+
+  @@map("push_subscriptions")
+}
+
+model Session {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  tokenHash   String    @map("token_hash")
+  deviceInfo  String?   @map("device_info")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt   DateTime? @map("revoked_at") @db.Timestamptz
+  rotatedFrom String?   @map("rotated_from") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  // Relations
+  user        User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@map("sessions")
+}
+
+model OutboxEvent {
+  id          String   @id @default(uuid()) @db.Uuid
+  eventType   String   @map("event_type")
+  aggregateId String   @map("aggregate_id") @db.Uuid
+  payload     Json
+  processed   Boolean  @default(false)
+  processedAt DateTime? @map("processed_at") @db.Timestamptz
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([processed, createdAt])
+  @@map("outbox_events")
+}
+
+model BreakGlassRequest {
+  id                     String                 @id @default(uuid()) @db.Uuid
+  incidentId             String                 @map("incident_id") @db.Uuid
+  requesterUserId        String                 @map("requester_user_id") @db.Uuid
+  requesterTeamContext   String?                @map("requester_team_context")
+  type                   BreakGlassType         @default(NORMAL_OVERRIDE)
+  status                 BreakGlassStatus       @default(REQUESTED)
+  requestedScopes        BreakGlassScope[]      @map("requested_scopes")
+  approvedScopes         BreakGlassScope[]      @default([]) @map("approved_scopes")
+  reason                 String
+  requestedAt            DateTime               @default(now()) @map("requested_at") @db.Timestamptz
+  approverUserId         String?                @map("approver_user_id") @db.Uuid
+  approvedAt             DateTime?              @map("approved_at") @db.Timestamptz
+  activatedAt            DateTime?              @map("activated_at") @db.Timestamptz
+  expiresAt              DateTime?              @map("expires_at") @db.Timestamptz
+  revokerUserId          String?                @map("revoker_user_id") @db.Uuid
+  revokedAt              DateTime?              @map("revoked_at") @db.Timestamptz
+  revocationReason       String?                @map("revocation_reason")
+  rejectedAt             DateTime?              @map("rejected_at") @db.Timestamptz
+  rejectionReason        String?                @map("rejection_reason")
+  supervisorReviewStatus SupervisorReviewStatus @default(NOT_REQUIRED) @map("supervisor_review_status")
+  reviewerUserId         String?                @map("reviewer_user_id") @db.Uuid
+  reviewedAt             DateTime?              @map("reviewed_at") @db.Timestamptz
+  reviewNotes            String?                @map("review_notes")
+  auditCorrelationId     String?                @map("audit_correlation_id")
+  createdAt              DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt              DateTime               @updatedAt @map("updated_at") @db.Timestamptz
+
+  // Relations
+  incident               Incident               @relation(fields: [incidentId], references: [id])
+  requester              User                   @relation("BreakGlassRequester", fields: [requesterUserId], references: [id])
+  approver               User?                  @relation("BreakGlassApprover", fields: [approverUserId], references: [id])
+  revoker                User?                  @relation("BreakGlassRevoker", fields: [revokerUserId], references: [id])
+  reviewer               User?                  @relation("BreakGlassReviewer", fields: [reviewerUserId], references: [id])
+
+  @@index([incidentId, status])
+  @@index([requesterUserId, status])
+  @@index([status, expiresAt])
+  @@map("break_glass_requests")
+}
+

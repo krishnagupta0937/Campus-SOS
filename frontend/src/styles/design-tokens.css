@@ -1,0 +1,140 @@
+/* Campus SOS Design Tokens — Calm Authority Visual Identity */
+:root {
+  /* Canvas & Surfaces */
+  --bg: #FAFAF7;
+  --surface: #FFFFFF;
+  --surface-2: #F2F2ED;
+  --surface-hover: #ECECE6;
+  --border: #DEDED6;
+  --border-strong: #C4C4BA;
+
+  /* Typography Colors */
+  --text: #14171A;
+  --text-muted: #5B6168;
+  --text-inverse: #FFFFFF;
+
+  /* Primary Brand — Deep Calm Teal */
+  --brand: #0F5C7A;
+  --brand-hover: #0B465D;
+  --brand-contrast: #FFFFFF;
+  --brand-soft: #E3F0F5;
+  --brand-border: #BCDDE7;
+
+  /* Emergency Accent — Reserved Strictly for Critical / Emergency SOS */
+  --emergency: #C8102E;
+  --emergency-hover: #A00D25;
+  --emergency-contrast: #FFFFFF;
+  --emergency-soft: #FBE9EC;
+  --emergency-border: #F3BAC4;
+
+  /* Operational / Status Colors */
+  --success: #1F7A4D;
+  --success-soft: #E5F5ED;
+  --warning: #A15C00;
+  --warning-soft: #FEF3E2;
+  --info: #1B5FAA;
+  --info-soft: #EAF2FB;
+
+  /* Duty States */
+  --duty-available: #1F7A4D;
+  --duty-busy: #A15C00;
+  --duty-offline: #6B7077;
+
+  /* Interactive & Focus */
+  --focus: #1B5FAA;
+  --focus-ring: rgba(27, 95, 170, 0.4);
+  --disabled: #9AA0A6;
+  --disabled-bg: #EAEAE4;
+
+  /* Typography */
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Font Sizes / Line Heights */
+  --text-display: 32px;
+  --lh-display: 40px;
+  --text-h1: 24px;
+  --lh-h1: 32px;
+  --text-h2: 20px;
+  --lh-h2: 28px;
+  --text-h3: 16px;
+  --lh-h3: 24px;
+  --text-body: 15px;
+  --lh-body: 22px;
+  --text-body-sm: 13px;
+  --lh-body-sm: 18px;
+  --text-caption: 12px;
+  --lh-caption: 16px;
+
+  /* Spacing (4px grid base) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-control: 8px;
+  --radius-card: 12px;
+  --radius-pill: 9999px;
+
+  /* Elevation (Crisp architectural borders over heavy shadows) */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* Transitions */
+  --transition-fast: 120ms cubic-bezier(0.2, 0, 0, 1);
+  --transition-base: 200ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+[data-theme="dark"] {
+  --bg: #0F1214;
+  --surface: #171B1F;
+  --surface-2: #1F252A;
+  --surface-hover: #262D33;
+  --border: #2C343B;
+  --border-strong: #3D4750;
+
+  --text: #ECEFF1;
+  --text-muted: #9AA3AB;
+  --text-inverse: #0F1214;
+
+  --brand: #5BB4D6;
+  --brand-hover: #75C2DF;
+  --brand-contrast: #06232F;
+  --brand-soft: #12303C;
+  --brand-border: #1E4657;
+
+  --emergency: #FF5C72;
+  --emergency-hover: #FF7588;
+  --emergency-contrast: #2A0007;
+  --emergency-soft: #3A1219;
+  --emergency-border: #5A1C25;
+
+  --success: #34A853;
+  --success-soft: #14331E;
+  --warning: #F59E0B;
+  --warning-soft: #382405;
+  --info: #3B82F6;
+  --info-soft: #11284A;
+
+  --duty-available: #34A853;
+  --duty-busy: #F59E0B;
+  --duty-offline: #80868B;
+
+  --focus: #5BB4D6;
+  --focus-ring: rgba(91, 180, 214, 0.4);
+  --disabled: #5F6368;
+  --disabled-bg: #22262B;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-overlay: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
