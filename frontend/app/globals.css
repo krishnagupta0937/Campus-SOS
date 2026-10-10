@@ -137,3 +137,16 @@
 .tech-shadow-emergency {
   box-shadow: 3px 3px 0px #D94B3D;
 }
+
+/* Restrained depth and 3D surface elevation */
+.depth-layer-1 {
+  box-shadow: 0 1px 3px rgba(39, 43, 39, 0.08), 2px 2px 0px #272B27;
+}
+
+.depth-layer-2 {
+  box-shadow: 0 4px 14px rgba(39, 43, 39, 0.09), 3px 3px 0px #272B27;
+}
+
+.depth-emergency {
+  box-shadow: 0 6px 18px rgba(217, 75, 61, 0.22), 3px 3px 0px #D94B3D;
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import { cn } from "@/lib/utils";
 import { X } from "lucide-react";
 
@@ -12,6 +12,8 @@ interface DialogProps {
 }
 
 export function Dialog({ open, onOpenChange, children }: DialogProps) {
+  const shouldReduceMotion = useReducedMotion();
+
   // ESC key listener
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -48,7 +50,7 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.18, ease: "easeOut" }}
+            transition={{ duration: shouldReduceMotion ? 0.08 : 0.16, ease: "easeOut" }}
             className="fixed inset-0 bg-[#272B27]/75 backdrop-blur-[3px]"
             onClick={() => onOpenChange(false)}
             aria-hidden="true"
@@ -56,11 +58,11 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
 
           {/* Modal Content Box with smooth entrance & exit transition */}
           <motion.div
-            initial={{ opacity: 0, scale: 0.96, y: 8 }}
+            initial={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 6 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.96, y: 8 }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="relative z-10 w-full max-w-2xl bg-[#F5F1E8] border-2 border-[#272B27] tech-shadow p-6 sm:p-8 overflow-hidden text-[#272B27]"
+            exit={shouldReduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 6 }}
+            transition={{ duration: shouldReduceMotion ? 0.08 : 0.20, ease: [0.16, 1, 0.3, 1] }}
+            className="relative z-10 w-full max-w-2xl bg-[#F5F1E8] border-2 border-[#272B27] depth-layer-2 p-6 sm:p-8 overflow-hidden text-[#272B27]"
           >
             {children}
           </motion.div>

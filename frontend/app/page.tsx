@@ -21,6 +21,7 @@ import {
   getAccountByRoleId,
 } from "@/lib/sample-accounts";
 import { fetchMyReports, fetchTeamIncidents } from "@/lib/api-client";
+import { LoadingScreen } from "@/components/ui/loading-screen";
 
 export default function Page() {
   // Navigation & Role states
@@ -178,6 +179,9 @@ export default function Page() {
 
   return (
     <div className="min-h-screen bg-[#F5F1E8] text-[#272B27] flex flex-col font-sans">
+      {/* Branded Loading Screen (From Video Reference - Initial Boot Only) */}
+      <LoadingScreen />
+
       {/* Top Application Bar with Navigation & Dev Role Switcher */}
       <MotionNav
         onOpenSos={() => setSosModalOpen(true)}

@@ -55,3 +55,5 @@ frontend/public/uploads/*
 frontend refrence/
 .agent/
 .agents/
+*.mp4
+*.mov

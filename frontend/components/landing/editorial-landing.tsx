@@ -93,7 +93,7 @@ export function EditorialLanding({
               </span>
 
               {/* Action 1: EMERGENCY SOS (Immediate Threat) */}
-              <div className="p-4 sm:p-5 bg-[#FCEBE9] border-2 border-[#D94B3D] tech-shadow-emergency transition-all duration-150 hover:-translate-y-0.5">
+              <div className="p-4 sm:p-5 bg-[#FCEBE9] border-2 border-[#D94B3D] depth-emergency transition-all duration-150 hover:-translate-y-0.5">
                 <div className="flex items-center justify-between mb-2">
                   <Badge variant="emergency" className="text-[10px] tracking-wider font-mono">
                     CRITICAL ACTION
@@ -120,7 +120,7 @@ export function EditorialLanding({
               </div>
 
               {/* Action 2: REPORT AN INCIDENT (Non-Emergency Intake) */}
-              <div className="p-4 sm:p-5 bg-white border-2 border-[#272B27] tech-shadow transition-all duration-150 hover:-translate-y-0.5">
+              <div className="p-4 sm:p-5 bg-white border-2 border-[#272B27] depth-layer-2 transition-all duration-150 hover:-translate-y-0.5">
                 <div className="flex items-center justify-between mb-2">
                   <Badge variant="default" className="text-[10px] tracking-wider font-mono">
                     STANDARD INTAKE
@@ -173,7 +173,7 @@ export function EditorialLanding({
             </div>
 
             {/* Emergency Hotline Quick Access with working tel: link */}
-            <div className="p-3 bg-[#EEE8DC] border-2 border-[#272B27] font-mono text-xs flex items-center justify-between tech-shadow-sm">
+            <div className="p-3 bg-[#EEE8DC] border-2 border-[#272B27] font-mono text-xs flex items-center justify-between depth-layer-1">
               <span className="flex items-center gap-1.5 font-bold text-[#D94B3D]">
                 <PhoneCall className="w-4 h-4" /> 24/7 HOTLINE:
               </span>

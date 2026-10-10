@@ -40,14 +40,15 @@ export function StudentView({
   incidents,
   activeSubView = "home",
 }: StudentViewProps) {
-  const [activeTab, setActiveTab] = React.useState<"HOME" | "EXPLORE" | "REPORTS" | "NOTICES">(
-    activeSubView === "explore" ? "EXPLORE" : activeSubView === "reports" ? "REPORTS" : "HOME"
+  const [activeTab, setActiveTab] = React.useState<"HOME" | "EXPLORE" | "REPORTS" | "HOTLINES">(
+    activeSubView === "explore" ? "EXPLORE" : activeSubView === "reports" ? "REPORTS" : activeSubView === "hotlines" ? "HOTLINES" : "HOME"
   );
   const [reportsSubTab, setReportsSubTab] = React.useState<"REPORTS" | "SOS">("SOS");
 
   React.useEffect(() => {
     if (activeSubView === "explore") setActiveTab("EXPLORE");
     else if (activeSubView === "reports") setActiveTab("REPORTS");
+    else if (activeSubView === "hotlines") setActiveTab("HOTLINES");
     else if (activeSubView === "home") setActiveTab("HOME");
   }, [activeSubView]);
 
@@ -76,6 +77,7 @@ export function StudentView({
           { key: "HOME", label: "Student Dashboard" },
           { key: "EXPLORE", label: "Campus Explore (2D Map)" },
           { key: "REPORTS", label: `My Reports (${incidents.length})` },
+          { key: "HOTLINES", label: "Emergency Hotlines (24/7)" },
         ].map((tab) => {
           const isActive = activeTab === tab.key;
           return (
@@ -410,6 +412,71 @@ export function StudentView({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {/* 4. DEDICATED 24/7 VERIFIED EMERGENCY HOTLINES VIEW */}
+      {activeTab === "HOTLINES" && (
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b-2 border-[#272B27]/20 pb-4">
+            <div>
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 bg-[#D94B3D] text-white font-mono text-xs font-bold uppercase tracking-wider mb-2">
+                <span>IMMEDIATE ESCALATION DIRECTORY</span>
+              </div>
+              <h3 className="text-xl sm:text-2xl font-black uppercase text-[#272B27]">
+                24/7 Verified Emergency Hotlines
+              </h3>
+              <p className="text-xs sm:text-sm font-sans text-[#5B6158] mt-1">
+                Direct telephony connections to campus duty officers. Validated toll-free access from all networks.
+              </p>
+            </div>
+            <div className="px-3 py-1.5 bg-[#E6ECE5] border border-[#272B27] font-mono text-xs text-[#272B27] flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
+              <span>4 PRIORITY LINES LIVE</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {hotlines.map((h, i) => (
+              <div
+                key={i}
+                className="p-5 bg-white border-2 border-[#272B27] tech-shadow hover:bg-[#FAF7F2] transition-colors flex flex-col justify-between space-y-4"
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-mono font-bold uppercase text-[#5B6158]">
+                      LINE 0{i + 1}
+                    </span>
+                    <Badge variant={i === 0 ? "emergency" : i === 2 ? "sage" : "default"} className="text-[10px]">
+                      {h.avail}
+                    </Badge>
+                  </div>
+                  <h4 className="text-base font-bold text-[#272B27] uppercase">{h.title}</h4>
+                  <p className="text-lg font-mono font-bold text-[#D94B3D] mt-2">
+                    {h.number}
+                  </p>
+                </div>
+
+                <a
+                  href={`tel:${h.number.replace(/[^0-9+]/g, "")}`}
+                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-[#272B27] text-[#F5F1E8] font-mono text-xs font-bold uppercase tracking-wider hover:bg-[#3E453E] border-2 border-[#272B27] tech-shadow-sm transition-all hover:-translate-y-0.5 active:translate-y-0.5 cursor-pointer text-center"
+                >
+                  <PhoneCall className="w-4 h-4 text-[#D94B3D]" />
+                  <span>Call {h.title.split(" ")[0]} Now ({h.number})</span>
+                </a>
+              </div>
+            ))}
+          </div>
+
+          {/* Emergency protocol guidance */}
+          <div className="p-4 bg-[#EEE8DC] border-2 border-[#272B27] font-mono text-xs text-[#272B27] space-y-2">
+            <p className="font-bold uppercase flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-[#D94B3D]" /> Important Protocol Notice:
+            </p>
+            <p className="text-[#5B6158] leading-relaxed">
+              When calling, state your current building or campus landmark immediately. If voice communication puts you in danger (e.g. active violence or harassment), use the <strong>Emergency SOS</strong> digital trigger above to transmit coordinates silently to duty responders.
+            </p>
+          </div>
         </div>
       )}
     </div>

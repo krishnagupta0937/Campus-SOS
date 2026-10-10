@@ -146,7 +146,7 @@ export function EmergencySosModal({
               <PhoneCall className="w-3.5 h-3.5" /> 24/7 CAMPUS HOTLINE:
             </span>
             <a
-              href="tel:1800226787"
+              href="tel:+911800226787"
               className="font-bold underline text-[#272B27] hover:text-[#D94B3D]"
             >
               +91 1800-CAMPUS-SOS

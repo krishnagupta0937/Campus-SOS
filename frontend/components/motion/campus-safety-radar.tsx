@@ -94,7 +94,7 @@ export function CampusSafetyRadar({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "relative w-full bg-[#EEE8DC] border-2 border-[#272B27] tech-shadow overflow-hidden flex flex-col font-mono select-none",
+        "relative w-full bg-[#EEE8DC] border-2 border-[#272B27] depth-layer-2 overflow-hidden flex flex-col font-mono select-none",
         className
       )}
     >
@@ -120,8 +120,8 @@ export function CampusSafetyRadar({ className }: { className?: string }) {
         </div>
       </div>
 
-      {/* Main Radar Screen Viewport */}
-      <div className="relative w-full h-[340px] sm:h-[400px] bg-[#F5F1E8] tech-grid flex items-center justify-center overflow-hidden">
+      {/* Main Radar Screen Viewport with layered depth vignette */}
+      <div className="relative w-full h-[340px] sm:h-[400px] bg-[#F5F1E8] tech-grid flex items-center justify-center overflow-hidden shadow-[inset_0_0_20px_rgba(39,43,39,0.06)]">
         {/* CSS Keyframes for smooth continuous radar sweep */}
         <style>{`
           @keyframes radar-sweep {
