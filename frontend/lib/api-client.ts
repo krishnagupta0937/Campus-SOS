@@ -61,9 +61,9 @@ export async function authenticate(email: string, password = "Password123!"): Pr
   const data = await res.json();
   const auth: StoredAuth = {
     token: data.access_token,
-    email: data.user.email,
-    userId: data.user.id,
-    role: data.user.role,
+    email: email || data.user?.email || "student.priya@campus-sos.edu",
+    userId: data.user?.id || "anonymous",
+    role: data.user?.role || "STUDENT",
     expiresAt: Date.now() + 15 * 60 * 1000, // 15 mins
   };
   setStoredAuth(auth);
@@ -74,7 +74,7 @@ export async function ensureAuthenticated(account?: SampleAccount | null): Promi
   const current = getStoredAuth();
   const targetEmail = account?.email || "student.priya@campus-sos.edu";
 
-  if (current && current.email.toLowerCase() === targetEmail.toLowerCase()) {
+  if (current && current.email && targetEmail && current.email.toLowerCase() === targetEmail.toLowerCase()) {
     return current.token;
   }
 
