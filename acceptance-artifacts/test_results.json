@@ -1,0 +1,176 @@
+[
+  {
+    "workflow": 1,
+    "name": "Student Authentication & Token Storage",
+    "status": "PASS",
+    "details": "JWT token received and securely stored in campus_sos_backend_auth"
+  },
+  {
+    "workflow": 1,
+    "name": "Direct Protected Page Access with Active Session",
+    "status": "PASS",
+    "details": "Authenticated session recognized on direct navigation"
+  },
+  {
+    "workflow": 1,
+    "name": "Client Sign Out Session Invalidation",
+    "status": "PASS",
+    "details": "Session storage cleared upon signing out"
+  },
+  {
+    "workflow": 2,
+    "name": "Dashboard Core Actions Availability",
+    "status": "PASS",
+    "details": "Emergency SOS and Standard Report buttons clearly present"
+  },
+  {
+    "workflow": 2,
+    "name": "Dashboard Tab Navigation to Reports",
+    "status": "PASS",
+    "details": "Switched to My Reports tab displaying report history"
+  },
+  {
+    "workflow": 2,
+    "name": "Hotlines View Content Rendering",
+    "status": "PASS",
+    "details": "Live verified hotlines rendered dynamically"
+  },
+  {
+    "workflow": 3,
+    "name": "Standard Incident Intake Modal Opened",
+    "status": "PASS",
+    "details": "Intake modal triggered and displayed"
+  },
+  {
+    "workflow": 3,
+    "name": "Standard Incident Form Submission Action",
+    "status": "PASS",
+    "details": "Submit action persisted to backend and returned success"
+  },
+  {
+    "workflow": 3,
+    "name": "Standard Incident Displayed in Student History",
+    "status": "PASS",
+    "details": "Report verified in student history table"
+  },
+  {
+    "workflow": 4,
+    "name": "Emergency SOS Modal Triggered",
+    "status": "PASS",
+    "details": "High-contrast emergency intake dialog displayed"
+  },
+  {
+    "workflow": 4,
+    "name": "AI Emergency Classifier & First-Aid Protocol Card",
+    "status": "PASS",
+    "details": "Intelligent classifier identified Fire Hazard and displayed evacuation instructions"
+  },
+  {
+    "workflow": 4,
+    "name": "Explicit Review Step Safeguard Verified",
+    "status": "PASS",
+    "details": "Review screen displayed with teams and location details before broadcast dispatch"
+  },
+  {
+    "workflow": 4,
+    "name": "Dispatch Safeguard: Confirmation Checkbox Enforcement",
+    "status": "PASS",
+    "details": "Confirm button strictly disabled until safety checkbox armed"
+  },
+  {
+    "workflow": 4,
+    "name": "Explicit Emergency Confirmation & Live Tracker Activation",
+    "status": "PASS",
+    "details": "Emergency SOS dispatch confirmed only after explicit action and active tracker launched"
+  },
+  {
+    "workflow": 5,
+    "name": "Image MIME Type Support (JPEG, PNG, WebP)",
+    "status": "PASS",
+    "details": "Accepted image types parsed and handled"
+  },
+  {
+    "workflow": 5,
+    "name": "File Size Enforcement (5MB Limit)",
+    "status": "PASS",
+    "details": "5MB maximum upload limit enforced"
+  },
+  {
+    "workflow": 6,
+    "name": "Interactive Campus Map Visual Rendering & Pin Coordinates",
+    "status": "PASS",
+    "details": "SVG grid, landmarks, and 46 interactive elements active"
+  },
+  {
+    "workflow": 7,
+    "name": "Admin Role Workspace Access & Telemetry",
+    "status": "PASS",
+    "details": "Administrative telemetry and case queue rendered for admin"
+  },
+  {
+    "workflow": 7,
+    "name": "Security Responder Workspace Access & Case Queue",
+    "status": "PASS",
+    "details": "Department workspace and duty status toggles rendered"
+  },
+  {
+    "workflow": 7,
+    "name": "Chief Proctor Confidential Workspace Isolation",
+    "status": "PASS",
+    "details": "Disciplinary & harassment records isolated to authorized proctor workspace"
+  },
+  {
+    "workflow": 8,
+    "name": "Direct 1-Tap Emergency Phone Links (tel: Protocol)",
+    "status": "PASS",
+    "details": "Found 4 active tel: action links (tel:+911800226787, tel:+911800226911, tel:+911800226100, tel:+911800226444)"
+  },
+  {
+    "workflow": 9,
+    "name": "Concurrent Independent Session Support",
+    "status": "PASS",
+    "details": "Isolated browser contexts maintain distinct roles simultaneously"
+  },
+  {
+    "workflow": 10,
+    "name": "Immediate Hotline Access During Loading",
+    "status": "PASS",
+    "details": "Emergency safety contact accessible without waiting for animation"
+  },
+  {
+    "workflow": 11,
+    "name": "Mobile Responsive Layout (375px Viewport)",
+    "status": "PASS",
+    "details": "No horizontal layout overflow on mobile screen"
+  },
+  {
+    "workflow": 11,
+    "name": "Desktop Layout Spacing & Alignment (1440px)",
+    "status": "PASS",
+    "details": "Clean multi-column responsive grid"
+  },
+  {
+    "workflow": 11,
+    "name": "Keyboard Accessibility (ESC Dismissal)",
+    "status": "PASS",
+    "details": "Native escape key handler responsive"
+  },
+  {
+    "workflow": 12,
+    "name": "Zero React Hydration Mismatch Warnings",
+    "status": "PASS",
+    "details": "No hydration warnings detected"
+  },
+  {
+    "workflow": 12,
+    "name": "Unhandled JavaScript Runtime Exceptions",
+    "status": "PASS",
+    "details": "Zero unhandled exceptions"
+  },
+  {
+    "workflow": 12,
+    "name": "Critical Network Request Failures",
+    "status": "PASS",
+    "details": "Recorded 0 background telemetry queries"
+  }
+]

@@ -28,28 +28,33 @@ import {
   ChevronRight,
   ShieldAlert,
 } from "lucide-react";
+import { formatLocation, type IncidentRecord } from "@/lib/api-client";
+
+type AdminTab = "OVERVIEW" | "INCIDENTS" | "DIRECTORY" | "AUDIT";
 
 interface AdminViewProps {
-  incidents: any[];
+  incidents: IncidentRecord[];
   onOpenSosModal?: () => void;
 }
 
 export function AdminView({ incidents }: AdminViewProps) {
-  const [activeTab, setActiveTab] = React.useState<"OVERVIEW" | "INCIDENTS" | "DIRECTORY" | "AUDIT">("OVERVIEW");
+  const [activeTab, setActiveTab] = React.useState<AdminTab>("OVERVIEW");
   const [filterWorkflow, setFilterWorkflow] = React.useState<string>("ALL");
   const [filterStatus, setFilterStatus] = React.useState<string>("ALL");
-  const [selectedCase, setSelectedCase] = React.useState<any | null>(null);
+  const [selectedCase, setSelectedCase] = React.useState<IncidentRecord | null>(null);
+
+  const safeIncidents = Array.isArray(incidents) ? incidents : [];
 
   // Filtered incidents
-  const filteredIncidents = incidents.filter((inc) => {
+  const filteredIncidents = safeIncidents.filter((inc) => {
     if (filterWorkflow !== "ALL" && inc.workflow !== filterWorkflow) return false;
     if (filterStatus !== "ALL" && inc.status !== filterStatus) return false;
     return true;
   });
 
-  const totalIncidents = incidents.length;
-  const activeEmergencies = incidents.filter((i) => i.workflow === "EMERGENCY_SOS" && i.status !== "RESOLVED").length;
-  const resolvedCount = incidents.filter((i) => i.status === "RESOLVED").length;
+  const totalIncidents = safeIncidents.length;
+  const activeEmergencies = safeIncidents.filter((i) => i.workflow === "EMERGENCY_SOS" && i.status !== "RESOLVED").length;
+  const resolvedCount = safeIncidents.filter((i) => i.status === "RESOLVED").length;
 
   // Dedicated Personnel Directory (Campus SOS Team only, NEVER students!)
   const personnelDirectory = [
@@ -87,7 +92,7 @@ export function AdminView({ incidents }: AdminViewProps) {
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => setActiveTab(tab.key as any)}
+                onClick={() => setActiveTab(tab.key as AdminTab)}
                 className={cn(
                   "relative px-4 py-2 font-bold uppercase transition-colors whitespace-nowrap cursor-pointer",
                   isActive ? "text-[#F5F1E8]" : "text-[#272B27] hover:bg-[#E5DDCF]"
@@ -270,8 +275,8 @@ export function AdminView({ incidents }: AdminViewProps) {
                           {inc.workflow === "EMERGENCY_SOS" ? "SOS" : "REPORT"}
                         </Badge>
                       </td>
-                      <td className="p-2.5 font-bold">{inc.category_label}</td>
-                      <td className="p-2.5 text-[#5B6158] truncate max-w-xs">{inc.location}</td>
+                      <td className="p-2.5 font-bold">{inc.category_label || inc.category}</td>
+                      <td className="p-2.5 text-[#5B6158] truncate max-w-xs">{formatLocation(inc.location)}</td>
                       <td className="p-2.5">
                         <span className={cn(
                           "px-2 py-0.5 border text-[10px] font-bold uppercase",
@@ -285,7 +290,7 @@ export function AdminView({ incidents }: AdminViewProps) {
                         </span>
                       </td>
                       <td className="p-2.5 text-[#5B6158]">
-                        {new Date(inc.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        {inc.created_at || inc.createdAt ? new Date(inc.created_at || inc.createdAt || 0).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}
                       </td>
                       <td className="p-2.5 text-right">
                         <Button
@@ -429,17 +434,17 @@ export function AdminView({ incidents }: AdminViewProps) {
               </div>
               <div className="p-2.5 bg-white border border-[#272B27]/20">
                 <span className="text-[#5B6158] block">4. PREDEFINED CAMPUS LOCATION:</span>
-                <span className="font-bold">{selectedCase.location}</span>
+                <span className="font-bold">{formatLocation(selectedCase.location)}</span>
               </div>
               <div className="p-2.5 bg-white border border-[#272B27]/20">
                 <span className="text-[#5B6158] block">5. EXACT MAP PIN COORDINATES:</span>
                 <span className="font-bold">
-                  X: {(selectedCase.pin?.x * 100 || 50).toFixed(1)}% | Y: {(selectedCase.pin?.y * 100 || 22).toFixed(1)}%
+                  X: {((selectedCase.pin?.x ?? 0.5) * 100).toFixed(1)}% | Y: {((selectedCase.pin?.y ?? 0.22) * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="p-2.5 bg-white border border-[#272B27]/20">
                 <span className="text-[#5B6158] block">6. DATE / TIMESTAMP:</span>
-                <span className="font-bold">{new Date(selectedCase.created_at).toLocaleString()}</span>
+                <span className="font-bold">{selectedCase.created_at || selectedCase.createdAt ? new Date(selectedCase.created_at || selectedCase.createdAt || 0).toLocaleString() : "—"}</span>
               </div>
               <div className="p-2.5 bg-white border border-[#272B27]/20 sm:col-span-2">
                 <span className="text-[#5B6158] block">7. AUTHORIZED REPORTER INFO:</span>
@@ -448,7 +453,7 @@ export function AdminView({ incidents }: AdminViewProps) {
               <div className="p-2.5 bg-white border border-[#272B27]/20 sm:col-span-2">
                 <span className="text-[#5B6158] block">8. COMPLETE UNMODIFIED STUDENT DESCRIPTION:</span>
                 <p className="font-sans text-sm italic text-[#272B27] mt-1 bg-[#F5F1E8] p-2 border border-black/10">
-                  "{selectedCase.description}"
+                  &ldquo;{selectedCase.description}&rdquo;
                 </p>
               </div>
               <div className="p-2.5 bg-white border border-[#272B27]/20">

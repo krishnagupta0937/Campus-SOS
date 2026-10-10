@@ -6,26 +6,9 @@ import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, Circle, Clock, Radio, Shield, User, MapPin, Phone, AlertTriangle } from "lucide-react";
+import { formatLocation, type IncidentRecord } from "@/lib/api-client";
 
-export interface SosTrackingData {
-  id: string;
-  public_id: string;
-  workflow: string;
-  category: string;
-  category_label: string;
-  description: string;
-  location: string;
-  pin: { x: number; y: number };
-  created_at: string;
-  status: string;
-  assigned_teams: string[];
-  responder?: {
-    name: string;
-    team: string;
-    phone: string;
-    eta?: string;
-  };
-}
+export type SosTrackingData = IncidentRecord;
 
 const SOS_STEPS = [
   { key: "EMERGENCY_CREATED", label: "Emergency Created", desc: "Emergency registered with college central dispatch" },
@@ -59,7 +42,7 @@ export function LiveSosTracker({
 
   const responder = {
     name: "Officer Vikram Rathore",
-    team: data.assigned_teams[0] || "Campus Security & Medical",
+    team: data.assigned_teams?.[0] || "Campus Security & Medical",
     phone: "+91 98765-43210",
     eta: currentStepIndex >= 3 ? "2 mins" : "En-route",
   };
@@ -88,7 +71,7 @@ export function LiveSosTracker({
               </Badge>
             </div>
             <p className="text-xs font-mono text-[#272B27] mt-0.5">
-              CASE REF: <span className="font-bold">{data.public_id}</span> • TIME: {new Date(data.created_at).toLocaleTimeString()}
+              CASE REF: <span className="font-bold">{data.public_id || data.publicId || data.id}</span> • TIME: {data.created_at || data.createdAt ? new Date(data.created_at || data.createdAt || 0).toLocaleTimeString() : "Just now"}
             </p>
           </div>
         </div>
@@ -102,17 +85,17 @@ export function LiveSosTracker({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-3 bg-white border border-[#272B27] tech-shadow-sm font-mono text-xs">
         <div>
           <span className="text-[#5B6158] block">INCIDENT CATEGORY:</span>
-          <span className="font-bold text-[#D94B3D] text-sm">{data.category_label}</span>
+          <span className="font-bold text-[#D94B3D] text-sm">{data.category_label || data.category}</span>
         </div>
         <div>
           <span className="text-[#5B6158] block">TARGET LOCATION:</span>
           <span className="font-bold text-[#272B27] flex items-center gap-1">
-            <MapPin className="w-3.5 h-3.5 text-[#D94B3D]" /> {data.location}
+            <MapPin className="w-3.5 h-3.5 text-[#D94B3D]" /> {formatLocation(data.location)}
           </span>
         </div>
         <div>
           <span className="text-[#5B6158] block">ASSIGNED RESPONDERS:</span>
-          <span className="font-bold text-[#272B27]">{data.assigned_teams.join(", ")}</span>
+          <span className="font-bold text-[#272B27]">{(data.assigned_teams || []).join(", ") || "Campus Response Unit"}</span>
         </div>
       </div>
 

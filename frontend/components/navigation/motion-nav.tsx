@@ -13,6 +13,7 @@ import {
   X,
   User,
   LogIn,
+  LogOut,
   ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ export function MotionNav({
   onSelectNav,
   activeNav,
   activeAccount,
+  onSignOut,
 }: MotionNavProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
@@ -131,16 +133,30 @@ export function MotionNav({
             <span className="xs:hidden">SOS</span>
           </Button>
 
-          {/* Sign In / Active Account Indicator */}
+          {/* Sign In / Active Account Indicator & Sign Out */}
           {activeAccount ? (
-            <Link
-              href="/login"
-              className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-[#EEE8DC] hover:bg-white border-2 border-[#272B27] text-xs font-mono font-bold text-[#272B27] tech-shadow-sm transition-transform duration-150 hover:-translate-y-0.5 active:translate-y-0.5"
-              title="Click to switch account or sign out"
-            >
-              <User className="w-3.5 h-3.5 text-emerald-700" />
-              <span className="max-w-[120px] truncate">{activeAccount.name}</span>
-            </Link>
+            <div className="hidden sm:inline-flex items-center gap-1.5">
+              <Link
+                href="/login"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-[#EEE8DC] hover:bg-white border-2 border-[#272B27] text-xs font-mono font-bold text-[#272B27] tech-shadow-sm transition-transform duration-150 hover:-translate-y-0.5 active:translate-y-0.5"
+                title="Switch account"
+              >
+                <User className="w-3.5 h-3.5 text-emerald-700" />
+                <span className="max-w-[120px] truncate">{activeAccount.name}</span>
+              </Link>
+              {onSignOut && (
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  aria-label="Sign Out"
+                  title="Sign Out"
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#EEE8DC] hover:bg-rose-100 hover:text-rose-700 border-2 border-[#272B27] text-xs font-mono font-bold text-[#272B27] tech-shadow-sm transition-transform duration-150 hover:-translate-y-0.5 active:translate-y-0.5 cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Sign Out</span>
+                </button>
+              )}
+            </div>
           ) : (
             <Link
               href="/login"

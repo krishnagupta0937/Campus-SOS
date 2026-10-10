@@ -4,7 +4,6 @@ export interface SampleAccount {
   id: string;
   name: string;
   email: string;
-  password: string;
   roleId: RoleId;
   roleLabel: string;
   dutyStation: string;
@@ -19,7 +18,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_student_01",
     name: "Priya Sharma",
     email: "student.priya@campus-sos.edu",
-    password: "Password123!",
     roleId: "student",
     roleLabel: "Student Body",
     dutyStation: "Hostel Block 4, Room 312",
@@ -31,7 +29,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_chief_proctor_01",
     name: "Col. Vikram Malhotra",
     email: "chief.proctor@campus-sos.edu",
-    password: "Password123!",
     roleId: "chief_proctor",
     roleLabel: "Chief Proctor",
     dutyStation: "Central Proctorate Office",
@@ -43,7 +40,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_campus_admin_01",
     name: "Dr. Rajesh Khanna",
     email: "admin.office@campus-sos.edu",
-    password: "Password123!",
     roleId: "campus_admin",
     roleLabel: "Campus Administration",
     dutyStation: "Main Administrative Building, Room 101",
@@ -57,7 +53,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_security_01",
     name: "Inspector K. Singh",
     email: "security.singh@campus-sos.edu",
-    password: "Password123!",
     roleId: "security",
     roleLabel: "Security Patrol",
     dutyStation: "Gate 1 Main Dispatch Post",
@@ -69,7 +64,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_medical_01",
     name: "Dr. Anita Roy",
     email: "medical.roy@campus-sos.edu",
-    password: "Password123!",
     roleId: "medical",
     roleLabel: "Medical Response",
     dutyStation: "Campus Health Center & Emergency Ward",
@@ -81,7 +75,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_fire_01",
     name: "Officer Arjun Mehta",
     email: "fire.safety@campus-sos.edu",
-    password: "Password123!",
     roleId: "fire_safety",
     roleLabel: "Fire & Chemical Safety",
     dutyStation: "Central Fire Depot / Science Quadrant",
@@ -95,7 +88,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_women_safety_01",
     name: "Prof. Sunita Rao",
     email: "women.safety@campus-sos.edu",
-    password: "Password123!",
     roleId: "women_safety",
     roleLabel: "Women Safety & ICC",
     dutyStation: "ICC Confidential Office (Block C)",
@@ -107,7 +99,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_men_safety_01",
     name: "Prof. Devendra Joshi",
     email: "men.safety@campus-sos.edu",
-    password: "Password123!",
     roleId: "men_safety",
     roleLabel: "Men Harassment & Welfare",
     dutyStation: "Student Welfare Wing",
@@ -119,7 +110,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_student_council_01",
     name: "Rohan Verma",
     email: "student.council@campus-sos.edu",
-    password: "Password123!",
     roleId: "student_council",
     roleLabel: "Student Council",
     dutyStation: "Student Activity Centre, Room 12",
@@ -133,7 +123,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_infra_01",
     name: "Er. Ramesh Patel",
     email: "infra.patel@campus-sos.edu",
-    password: "Password123!",
     roleId: "facilities",
     roleLabel: "Infrastructure & Works",
     dutyStation: "Estate Office & Maintenance Yard",
@@ -145,7 +134,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_transport_01",
     name: "Supervisor Mohit Sen",
     email: "transport.sen@campus-sos.edu",
-    password: "Password123!",
     roleId: "transport",
     roleLabel: "Transportation & Traffic",
     dutyStation: "Campus Transit Hub / North Parking Depot",
@@ -157,7 +145,6 @@ export const SAMPLE_ACCOUNTS: SampleAccount[] = [
     id: "acc_it_01",
     name: "Neha Kapoor",
     email: "it.digital@campus-sos.edu",
-    password: "Password123!",
     roleId: "it_digital",
     roleLabel: "IT & Digital Safety",
     dutyStation: "Central Computer Centre, Room 204",
@@ -173,4 +160,11 @@ export function getAccountByRoleId(roleId: RoleId): SampleAccount | undefined {
 
 export function getAccountByEmail(email: string): SampleAccount | undefined {
   return SAMPLE_ACCOUNTS.find((acc) => acc.email.toLowerCase() === email.toLowerCase());
+}
+
+/**
+ * Development test password helper strictly for local demo mode authentication
+ */
+export function getDevTestPassword(): string {
+  return "Password123!";
 }

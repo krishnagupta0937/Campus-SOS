@@ -68,4 +68,4 @@ async function bootstrap() {
   console.log(`🌍 CORS origin: ${configuredOrigin}`);
 }
 
-bootstrap();
+void bootstrap();

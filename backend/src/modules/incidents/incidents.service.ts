@@ -233,8 +233,22 @@ export class IncidentsService {
     pin: { x: number; y: number };
     attachment_ids?: string[];
   }, idempotencyKey: string) {
+    if (!data || !data.description || !data.category || !data.location || !data.pin) {
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'Missing required report fields: description, category, location, and pin',
+      });
+    }
+
     // Validate pin
-    if (data.pin.x < 0 || data.pin.x > 1 || data.pin.y < 0 || data.pin.y > 1) {
+    if (
+      typeof data.pin.x !== 'number' ||
+      typeof data.pin.y !== 'number' ||
+      data.pin.x < 0 ||
+      data.pin.x > 1 ||
+      data.pin.y < 0 ||
+      data.pin.y > 1
+    ) {
       throw new HttpException(
         { code: 'PIN_OUT_OF_RANGE', message: 'Pin coordinates must be between 0 and 1' },
         HttpStatus.UNPROCESSABLE_ENTITY,

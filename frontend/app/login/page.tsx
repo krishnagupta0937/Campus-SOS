@@ -6,8 +6,10 @@ import { useRouter } from "next/navigation";
 import {
   SAMPLE_ACCOUNTS,
   SampleAccount,
-  getAccountByEmail,
+  getDevTestPassword,
 } from "@/lib/sample-accounts";
+import { authenticate } from "@/lib/api-client";
+import { type RoleId } from "@/components/shared/role-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -40,39 +42,60 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = React.useState<string | null>(null);
   const [successMsg, setSuccessMsg] = React.useState<string | null>(null);
   const [loadingAccountId, setLoadingAccountId] = React.useState<string | null>(null);
+  const [isSubmitting, setIsSubmitting] = React.useState<boolean>(false);
 
-  const handleLogin = (account: SampleAccount) => {
+  const handleLogin = async (account: SampleAccount) => {
     setLoadingAccountId(account.id);
     setErrorMsg(null);
-    setSuccessMsg(`Authenticating as ${account.name} (${account.roleLabel})...`);
+    setSuccessMsg(`Verifying identity with campus security server as ${account.name} (${account.roleLabel})...`);
 
-    // Persist login session to localStorage
-    if (typeof window !== "undefined") {
-      localStorage.setItem("campus_sos_active_account", JSON.stringify(account));
-      localStorage.setItem("campus_sos_active_role", account.roleId);
+    try {
+      await authenticate(account.email, getDevTestPassword());
+      if (typeof window !== "undefined") {
+        localStorage.setItem("campus_sos_active_account", JSON.stringify(account));
+        localStorage.setItem("campus_sos_active_role", account.roleId);
+      }
+      setSuccessMsg(`Authenticated successfully. Redirecting...`);
+      setTimeout(() => {
+        router.push(`/?role=${account.roleId}&login=success`);
+      }, 300);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Authentication failed";
+      setErrorMsg(`Server login error: ${msg}`);
+      setSuccessMsg(null);
+    } finally {
+      setLoadingAccountId(null);
     }
-
-    setTimeout(() => {
-      router.push(`/?role=${account.roleId}&login=success`);
-    }, 450);
   };
 
-  const handleFormSubmit = (e: React.FormEvent) => {
+  const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
+    setSuccessMsg("Verifying credentials with backend server...");
+    setIsSubmitting(true);
 
-    const found = getAccountByEmail(email.trim());
-    if (!found) {
-      setErrorMsg("Unrecognized email address. Click any sample account below to test.");
-      return;
+    try {
+      const auth = await authenticate(email.trim(), password);
+      const matched = SAMPLE_ACCOUNTS.find((a) => a.email.toLowerCase() === auth.email.toLowerCase());
+      const roleId = (matched?.roleId || "student") as RoleId;
+
+      if (typeof window !== "undefined") {
+        if (matched) {
+          localStorage.setItem("campus_sos_active_account", JSON.stringify(matched));
+        }
+        localStorage.setItem("campus_sos_active_role", roleId);
+      }
+      setSuccessMsg(`Authenticated as ${auth.fullName || auth.email}. Redirecting...`);
+      setTimeout(() => {
+        router.push(`/?role=${roleId}&login=success`);
+      }, 300);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Invalid credentials";
+      setErrorMsg(`Login failed: ${msg}`);
+      setSuccessMsg(null);
+    } finally {
+      setIsSubmitting(false);
     }
-
-    if (password !== found.password && password !== "Password123!") {
-      setErrorMsg("Invalid password. Test password for all sample accounts is: Password123!");
-      return;
-    }
-
-    handleLogin(found);
   };
 
   const getRoleIcon = (roleId: string) => {

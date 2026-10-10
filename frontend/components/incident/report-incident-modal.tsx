@@ -8,12 +8,12 @@ import { Badge } from "@/components/ui/badge";
 import { CampusMap, PREDEFINED_CAMPUS_LOCATIONS, type CampusLocation } from "@/components/map/campus-map";
 import { FileText, Upload, X, CheckCircle2, ShieldCheck, HelpCircle } from "lucide-react";
 
-import { createStandardReport } from "@/lib/api-client";
+import { createStandardReport, type IncidentRecord } from "@/lib/api-client";
 
 interface ReportIncidentModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onReportSubmitted: (report: any) => void;
+  onReportSubmitted: (report: IncidentRecord) => void;
 }
 
 export const INCIDENT_CATEGORIES = [
@@ -82,9 +82,10 @@ export function ReportIncidentModal({
         ...result,
         category_label: selectedCatObj?.name || category,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsSubmitting(false);
-      setErrorMessage(err.message || "Failed to submit incident report. Please try again.");
+      const msg = err instanceof Error ? err.message : "Failed to submit incident report. Please try again.";
+      setErrorMessage(msg);
     }
   };
 

@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { CampusMap, type IncidentPin } from "@/components/map/campus-map";
+import { fetchHotlines, fetchMapPins, type HotlineRecord } from "@/lib/api-client";
 import {
   ShieldAlert,
   FileText,
@@ -16,20 +17,21 @@ import {
   MapPin,
   CheckCircle2,
   AlertTriangle,
-  ArrowRight,
   Shield,
   HeartPulse,
   Flame,
   Radio,
   ChevronRight,
-  Layers,
 } from "lucide-react";
+import { formatLocation, type IncidentRecord } from "@/lib/api-client";
+
+export type StudentTab = "HOME" | "EXPLORE" | "REPORTS" | "HOTLINES";
 
 interface StudentViewProps {
   onOpenSos: () => void;
   onOpenReport: () => void;
-  onSelectIncident: (inc: any) => void;
-  incidents: any[];
+  onSelectIncident: (inc: IncidentRecord) => void;
+  incidents: IncidentRecord[];
   activeSubView?: string;
 }
 
@@ -40,34 +42,66 @@ export function StudentView({
   incidents,
   activeSubView = "home",
 }: StudentViewProps) {
-  const [activeTab, setActiveTab] = React.useState<"HOME" | "EXPLORE" | "REPORTS" | "HOTLINES">(
-    activeSubView === "explore" ? "EXPLORE" : activeSubView === "reports" ? "REPORTS" : activeSubView === "hotlines" ? "HOTLINES" : "HOME"
-  );
+  const [selectedTab, setSelectedTab] = React.useState<StudentTab | null>(null);
+  const [prevSubView, setPrevSubView] = React.useState(activeSubView);
+  if (prevSubView !== activeSubView) {
+    setPrevSubView(activeSubView);
+    setSelectedTab(null);
+  }
+
+  const activeTab: StudentTab =
+    selectedTab ??
+    (activeSubView === "explore"
+      ? "EXPLORE"
+      : activeSubView === "reports"
+      ? "REPORTS"
+      : activeSubView === "hotlines"
+      ? "HOTLINES"
+      : "HOME");
+
   const [reportsSubTab, setReportsSubTab] = React.useState<"REPORTS" | "SOS">("SOS");
+  const [hotlines, setHotlines] = React.useState<HotlineRecord[]>([]);
+  const [explorePins, setExplorePins] = React.useState<IncidentPin[]>([]);
 
   React.useEffect(() => {
-    if (activeSubView === "explore") setActiveTab("EXPLORE");
-    else if (activeSubView === "reports") setActiveTab("REPORTS");
-    else if (activeSubView === "hotlines") setActiveTab("HOTLINES");
-    else if (activeSubView === "home") setActiveTab("HOME");
-  }, [activeSubView]);
+    let active = true;
+    async function loadData() {
+      try {
+        const [loadedHotlines, loadedPins] = await Promise.all([
+          fetchHotlines(),
+          fetchMapPins(),
+        ]);
+        if (active) {
+          setHotlines(loadedHotlines);
+          if (loadedPins && loadedPins.length > 0) {
+            setExplorePins(loadedPins);
+          } else {
+            const activePins: IncidentPin[] = incidents
+              .filter((i): i is typeof i & { pin: { x: number; y: number } } => Boolean(i.pin && typeof i.pin.x === "number" && typeof i.pin.y === "number"))
+              .map((i) => ({
+                id: i.id || i.public_id || "pin_" + Math.random(),
+                x: i.pin.x,
+                y: i.pin.y,
+                title: i.category_label || i.category || "Campus Incident",
+                category: i.category || "General",
+                isEmergency: i.workflow === "EMERGENCY_SOS",
+                status: i.status || "Active",
+              }));
+            setExplorePins(activePins);
+          }
+        }
+      } catch (err) {
+        console.warn("Failed to load hotlines or map pins:", err);
+      }
+    }
+    loadData();
+    return () => {
+      active = false;
+    };
+  }, [incidents]);
 
   const sosIncidents = incidents.filter((i) => i.workflow === "EMERGENCY_SOS");
   const standardReports = incidents.filter((i) => i.workflow === "STANDARD_REPORT");
-
-  // Verified 24/7 Emergency Campus Hotlines
-  const hotlines = [
-    { title: "Central Campus Police & Security Control", number: "+91 1800-226-787", avail: "24/7 Available" },
-    { title: "Campus Health Clinic & Ambulance", number: "+91 1800-226-911", avail: "Immediate Dispatch" },
-    { title: "Women Safety Cell & Confidential Support", number: "+91 1800-226-100", avail: "Confidential Escort" },
-    { title: "Chief Proctor Grievance Helpline", number: "+91 1800-226-444", avail: "Duty Officer on Call" },
-  ];
-
-  // Sanitized Map Pins for Student Explore
-  const explorePins: IncidentPin[] = [
-    { id: "pin_1", x: 0.42, y: 0.58, title: "Lab 3 Chemical Maintenance", category: "Facility", isEmergency: false, status: "Under Control" },
-    { id: "pin_2", x: 0.16, y: 0.20, title: "North Parking Paving Works", category: "Traffic", isEmergency: false, status: "Advisory" },
-  ];
 
   return (
     <div className="space-y-6">
@@ -84,7 +118,7 @@ export function StudentView({
             <button
               key={tab.key}
               type="button"
-              onClick={() => setActiveTab(tab.key as any)}
+              onClick={() => setSelectedTab(tab.key as StudentTab)}
               className={cn(
                 "relative px-4 py-2 font-bold uppercase transition-colors whitespace-nowrap cursor-pointer",
                 isActive ? "text-[#F5F1E8]" : "text-[#272B27] hover:bg-[#E5DDCF]"
@@ -241,11 +275,11 @@ export function StudentView({
                   className="p-3 bg-white border border-[#272B27] tech-shadow-sm flex items-center justify-between"
                 >
                   <div>
-                    <h4 className="text-xs font-bold text-[#272B27]">{h.title}</h4>
+                    <h4 className="text-xs font-bold text-[#272B27]">{h.title || h.label}</h4>
                     <span className="text-[10px] font-mono text-[#5B6158]">{h.avail}</span>
                   </div>
                   <a
-                    href={`tel:${h.number.replace(/[^0-9+]/g, "")}`}
+                    href={`tel:${(h.number || h.phone || "").replace(/[^0-9+]/g, "")}`}
                     className="px-3.5 py-1.5 bg-[#272B27] text-[#F5F1E8] font-mono text-xs font-bold uppercase hover:bg-[#3E453E] border border-[#272B27] transition-all hover:-translate-y-0.5 active:translate-y-0.5 cursor-pointer"
                   >
                     Call
@@ -357,10 +391,10 @@ export function StudentView({
                           </span>
                         </div>
                         <p className="text-xs text-[#272B27] font-semibold italic">
-                          "{inc.description}"
+                          &ldquo;{inc.description}&rdquo;
                         </p>
                         <p className="text-[11px] font-mono text-[#5B6158]">
-                          Location: {inc.location} • Status: <strong className="text-[#D94B3D]">{inc.status}</strong>
+                          Location: {formatLocation(inc.location)} • Status: <strong className="text-[#D94B3D]">{inc.status}</strong>
                         </p>
                       </div>
                       <ChevronRight className="w-5 h-5 text-[#D94B3D]" />
@@ -399,10 +433,10 @@ export function StudentView({
                           </span>
                         </div>
                         <p className="text-xs text-[#272B27] italic">
-                          "{inc.description}"
+                          &ldquo;{inc.description}&rdquo;
                         </p>
                         <p className="text-[11px] font-mono text-[#5B6158]">
-                          Location: {inc.location} • Status: <strong>{inc.status}</strong>
+                          Location: {formatLocation(inc.location)} • Status: <strong>{inc.status}</strong>
                         </p>
                       </div>
                       <ChevronRight className="w-5 h-5 text-[#272B27]" />
@@ -451,18 +485,18 @@ export function StudentView({
                       {h.avail}
                     </Badge>
                   </div>
-                  <h4 className="text-base font-bold text-[#272B27] uppercase">{h.title}</h4>
+                  <h4 className="text-base font-bold text-[#272B27] uppercase">{h.title || h.label}</h4>
                   <p className="text-lg font-mono font-bold text-[#D94B3D] mt-2">
-                    {h.number}
+                    {h.number || h.phone}
                   </p>
                 </div>
 
                 <a
-                  href={`tel:${h.number.replace(/[^0-9+]/g, "")}`}
+                  href={`tel:${(h.number || h.phone || "").replace(/[^0-9+]/g, "")}`}
                   className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 bg-[#272B27] text-[#F5F1E8] font-mono text-xs font-bold uppercase tracking-wider hover:bg-[#3E453E] border-2 border-[#272B27] tech-shadow-sm transition-all hover:-translate-y-0.5 active:translate-y-0.5 cursor-pointer text-center"
                 >
                   <PhoneCall className="w-4 h-4 text-[#D94B3D]" />
-                  <span>Call {h.title.split(" ")[0]} Now ({h.number})</span>
+                  <span>Call {(h.title || h.label || "Line").split(" ")[0]} Now ({h.number || h.phone})</span>
                 </a>
               </div>
             ))}

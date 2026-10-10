@@ -11,16 +11,32 @@ import { DepartmentWorkspace } from "@/components/roles/department-workspace";
 import { EmergencySosModal } from "@/components/emergency/emergency-sos-modal";
 import { ReportIncidentModal } from "@/components/incident/report-incident-modal";
 import { LiveSosTracker, type SosTrackingData } from "@/components/live/live-sos-tracker";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ShieldAlert, ArrowLeft, Building2, Radio, User, LogIn, LogOut } from "lucide-react";
+import {
+  ArrowLeft,
+  Building2,
+  LogIn,
+  AlertTriangle,
+  RefreshCw,
+  Info,
+  ShieldCheck,
+} from "lucide-react";
 import Link from "next/link";
 import {
-  SAMPLE_ACCOUNTS,
   type SampleAccount,
   getAccountByRoleId,
+  getDevTestPassword,
 } from "@/lib/sample-accounts";
-import { fetchMyReports, fetchTeamIncidents } from "@/lib/api-client";
+import {
+  fetchMyReports,
+  fetchTeamIncidents,
+  fetchAdminIncidents,
+  authenticate,
+  logout,
+  verifyCurrentSession,
+  getStoredAuth,
+  type IncidentRecord,
+} from "@/lib/api-client";
 import { LoadingScreen } from "@/components/ui/loading-screen";
 
 export default function Page() {
@@ -30,140 +46,170 @@ export default function Page() {
   const [activeAccount, setActiveAccount] = React.useState<SampleAccount | null>(null);
   const [activeNav, setActiveNav] = React.useState<string>("home");
 
-  // Sync active account and role on mount & URL search
+  // Live Incident States (Genuinely empty on init, populated ONLY by real API responses)
+  const [incidents, setIncidents] = React.useState<IncidentRecord[]>([]);
+  const [isLoadingIncidents, setIsLoadingIncidents] = React.useState<boolean>(false);
+  const [fetchError, setFetchError] = React.useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = React.useState<boolean>(false);
+
+  // Modals & Live SOS Tracker
+  const [sosModalOpen, setSosModalOpen] = React.useState<boolean>(false);
+  const [reportModalOpen, setReportModalOpen] = React.useState<boolean>(false);
+  const [liveSosIncident, setLiveSosIncident] = React.useState<SosTrackingData | null>(null);
+
+  // Sync active account and verify authenticated session on mount & URL search
   React.useEffect(() => {
-    if (typeof window !== "undefined") {
+    let active = true;
+
+    async function initSession() {
+      if (typeof window === "undefined") return;
+
       const params = new URLSearchParams(window.location.search);
       const urlRole = params.get("role") as RoleId | null;
-      const stored = localStorage.getItem("campus_sos_active_account");
+      const storedAuth = getStoredAuth();
 
+      // If URL role requested in development
       if (urlRole) {
         setCurrentRole(urlRole);
         setViewMode("WORKSPACE");
         const found = getAccountByRoleId(urlRole);
         if (found) {
           setActiveAccount(found);
-          localStorage.setItem("campus_sos_active_account", JSON.stringify(found));
+          try {
+            // Authenticate directly with backend for this role
+            await authenticate(found.email, getDevTestPassword());
+          } catch {
+            console.warn("Development auto-login fallback for URL role");
+          }
         }
-      } else if (stored) {
+      } else if (storedAuth) {
+        // Verify stored session with backend /auth/me
         try {
-          const acc = JSON.parse(stored) as SampleAccount;
-          setActiveAccount(acc);
-          if (acc.roleId) {
-            setCurrentRole(acc.roleId);
+          const verified = await verifyCurrentSession();
+          if (active && verified) {
+            const matched = getAccountByRoleId((verified.role.toLowerCase() as RoleId) || "student");
+            if (matched) {
+              setActiveAccount(matched);
+              setCurrentRole(matched.roleId);
+            }
           }
         } catch {
-          // ignore corrupted storage
+          // If session expired or invalid
+          if (active) {
+            setActiveAccount(null);
+          }
         }
       } else {
-        // Default to student sample account
+        // Unauthenticated initial state: default to student view preview
         const def = getAccountByRoleId("student");
-        if (def) setActiveAccount(def);
+        if (def && active) {
+          setActiveAccount(def);
+        }
       }
     }
+
+    initSession();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  const handleRoleChange = (role: RoleId) => {
+  // Fetch real incidents when activeAccount or currentRole changes
+  const loadIncidents = React.useCallback(async () => {
+    if (!activeAccount) {
+      setIncidents([]);
+      return;
+    }
+
+    setIsLoadingIncidents(true);
+    setFetchError(null);
+
+    try {
+      if (currentRole === "student") {
+        const [reports, sos] = await Promise.all([
+          fetchMyReports(activeAccount, "reports"),
+          fetchMyReports(activeAccount, "sos"),
+        ]);
+        const merged = [...(sos || []), ...(reports || [])];
+        setIncidents(merged);
+      } else if (currentRole === "campus_admin") {
+        const allAdminIncidents = await fetchAdminIncidents(activeAccount);
+        setIncidents(allAdminIncidents || []);
+      } else {
+        const teamList = await fetchTeamIncidents(activeAccount);
+        setIncidents(teamList || []);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to load incidents from campus server.";
+      setFetchError(msg);
+      // Cleanly clear state on failure — NEVER preserve fabricated or stale fake records!
+      setIncidents([]);
+    } finally {
+      setIsLoadingIncidents(false);
+    }
+  }, [activeAccount, currentRole]);
+
+  React.useEffect(() => {
+    let isCancelled = false;
+    const run = async () => {
+      await Promise.resolve();
+      if (!isCancelled) {
+        loadIncidents();
+      }
+    };
+    void run();
+    return () => {
+      isCancelled = true;
+    };
+  }, [loadIncidents]);
+
+  // Verified role switcher (Authenticates against real backend)
+  const handleRoleChange = async (role: RoleId) => {
     setCurrentRole(role);
     setViewMode("WORKSPACE");
     const matched = getAccountByRoleId(role);
     if (matched) {
       setActiveAccount(matched);
-      if (typeof window !== "undefined") {
-        localStorage.setItem("campus_sos_active_account", JSON.stringify(matched));
+      try {
+        await authenticate(matched.email, getDevTestPassword());
+      } catch (err) {
+        console.warn("Backend auth notice for role switch:", err);
       }
     }
   };
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    await logout();
     setActiveAccount(null);
+    setIncidents([]);
+    setViewMode("LANDING");
     if (typeof window !== "undefined") {
       localStorage.removeItem("campus_sos_active_account");
+      localStorage.removeItem("campus_sos_active_role");
     }
   };
-  // Modals
-  const [sosModalOpen, setSosModalOpen] = React.useState(false);
-  const [reportModalOpen, setReportModalOpen] = React.useState(false);
-  const [liveSosIncident, setLiveSosIncident] = React.useState<SosTrackingData | null>(null);
 
-  // Synchronized Incidents State (populated from real backend)
-  const [incidents, setIncidents] = React.useState<any[]>([
-    {
-      id: "SOS-2026-904122",
-      public_id: "SOS-2026-9041",
-      workflow: "EMERGENCY_SOS",
-      category: "FIRE_HAZARD",
-      category_label: "Fire & Chemical Hazard",
-      description: "Chemical smoke detected in Block B Organic Chemistry Lab. Immediate evacuation in progress.",
-      location: "Academic Block B (Science Labs)",
-      pin: { x: 0.42, y: 0.58 },
-      photos: [],
-      created_at: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-      status: "TEAMS_NOTIFIED",
-      assigned_teams: ["Fire & Safety", "Security Patrol", "Campus Administration"],
-    },
-    {
-      id: "REP-2026-802114",
-      public_id: "REP-2026-8021",
-      workflow: "STANDARD_REPORT",
-      category: "INFRASTRUCTURE",
-      category_label: "Infrastructure & Hazard",
-      description: "Broken handrail on exterior stairway behind Academic Block A. Risk of fall during rainy periods.",
-      location: "Academic Block A (Lectures)",
-      pin: { x: 0.24, y: 0.54 },
-      photos: [],
-      created_at: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-      status: "UNDER_REVIEW",
-      assigned_teams: ["Infrastructure & Facilities"],
-    },
-  ]);
-
-  // Sync with real backend when activeAccount changes
-  React.useEffect(() => {
-    let active = true;
-    async function loadData() {
-      if (!activeAccount) return;
-      try {
-        if (activeAccount.roleId === "student") {
-          const r = await fetchMyReports(activeAccount, "reports");
-          const s = await fetchMyReports(activeAccount, "sos");
-          const merged = [...(s || []), ...(r || [])];
-          if (active && merged.length > 0) {
-            setIncidents((prev) => {
-              // merge unique by id
-              const ids = new Set(merged.map((m: any) => m.id));
-              const extras = prev.filter((p) => !ids.has(p.id));
-              return [...merged, ...extras];
-            });
-          }
-        } else {
-          const teamList = await fetchTeamIncidents(activeAccount);
-          if (active && teamList.length > 0) {
-            setIncidents((prev) => {
-              const ids = new Set(teamList.map((m: any) => m.id));
-              const extras = prev.filter((p) => !ids.has(p.id));
-              return [...teamList, ...extras];
-            });
-          }
-        }
-      } catch (e) {
-        console.warn("Backend fetch note:", e);
-      }
-    }
-    loadData();
-    return () => {
-      active = false;
-    };
-  }, [activeAccount]);
-
-  const handleEmergencyConfirmed = (newEmergency: any) => {
+  const handleEmergencyConfirmed = (newEmergency: IncidentRecord) => {
     setIncidents((prev) => [newEmergency, ...prev]);
-    setLiveSosIncident(newEmergency);
+    setLiveSosIncident({
+      id: newEmergency.id,
+      public_id: newEmergency.public_id || newEmergency.publicId || newEmergency.id,
+      workflow: "EMERGENCY_SOS",
+      category: newEmergency.category || "EMERGENCY",
+      category_label: newEmergency.category_label || "Emergency SOS",
+      description: newEmergency.description,
+      location: typeof newEmergency.location === "object" ? newEmergency.location?.text || "Pin" : newEmergency.location,
+      status: newEmergency.status || "REPORTED",
+      created_at: newEmergency.created_at || newEmergency.createdAt || new Date().toISOString(),
+      pin: newEmergency.pin || { x: 0.5, y: 0.22 },
+      assigned_teams: newEmergency.assigned_teams || ["Security Patrol", "Campus Administration"],
+    });
     setViewMode("WORKSPACE");
     setCurrentRole("student");
   };
 
-  const handleReportSubmitted = (newReport: any) => {
+  const handleReportSubmitted = (newReport: IncidentRecord) => {
     setIncidents((prev) => [newReport, ...prev]);
     setViewMode("WORKSPACE");
     setCurrentRole("student");
@@ -172,17 +218,56 @@ export default function Page() {
   const handleSelectNav = (key: string) => {
     setActiveNav(key);
     setViewMode("WORKSPACE");
-    if (key === "home") {
-      // Return to main role home
+  };
+
+  // Demo records generator (Explicitly isolated & visually labelled)
+  const toggleDemoMode = () => {
+    if (!isDemoMode) {
+      setIsDemoMode(true);
+      setIncidents([
+        {
+          id: "DEMO-SOS-01",
+          public_id: "DEMO-SOS-01",
+          workflow: "EMERGENCY_SOS",
+          category: "FIRE_HAZARD",
+          category_label: "Fire Hazard (Illustrative)",
+          description: "ILLUSTRATIVE DEMO: Simulated lab emergency drill record.",
+          location: "Academic Block B (Demo)",
+          pin: { x: 0.42, y: 0.58 },
+          photos: [],
+          created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
+          status: "TEAMS_NOTIFIED",
+          assigned_teams: ["Fire & Safety", "Security Patrol"],
+          isDemo: true,
+        },
+        {
+          id: "DEMO-REP-02",
+          public_id: "DEMO-REP-02",
+          workflow: "STANDARD_REPORT",
+          category: "INFRASTRUCTURE",
+          category_label: "Infrastructure (Illustrative)",
+          description: "ILLUSTRATIVE DEMO: Simulated facilities repair sample.",
+          location: "Academic Block A (Demo)",
+          pin: { x: 0.24, y: 0.54 },
+          photos: [],
+          created_at: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
+          status: "UNDER_REVIEW",
+          assigned_teams: ["Infrastructure & Facilities"],
+          isDemo: true,
+        },
+      ]);
+    } else {
+      setIsDemoMode(false);
+      loadIncidents();
     }
   };
 
   return (
     <div className="min-h-screen bg-[#F5F1E8] text-[#272B27] flex flex-col font-sans">
-      {/* Branded Loading Screen (From Video Reference - Initial Boot Only) */}
+      {/* Branded Loading Screen (Initial Boot Only, Non-Blocking) */}
       <LoadingScreen />
 
-      {/* Top Application Bar with Navigation & Dev Role Switcher */}
+      {/* Top Application Bar with Navigation */}
       <MotionNav
         onOpenSos={() => setSosModalOpen(true)}
         onOpenReport={() => setReportModalOpen(true)}
@@ -192,14 +277,14 @@ export default function Page() {
         onSignOut={handleSignOut}
       />
 
-      {/* Role Switcher Toolbar (Always visible for easy testing of all 12 roles) */}
+      {/* Explicitly Labelled Development & Demo Testing Toolbar */}
       <div className="w-full bg-[#EEE8DC] border-b border-[#272B27]/40 px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
         <div className="flex items-center gap-3">
           {viewMode === "WORKSPACE" ? (
             <button
               type="button"
               onClick={() => setViewMode("LANDING")}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#272B27] hover:bg-[#F5F1E8] font-bold uppercase cursor-pointer tech-shadow-sm"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-[#272B27] hover:bg-[#F5F1E8] font-bold uppercase cursor-pointer tech-shadow-sm transition-all"
             >
               <ArrowLeft className="w-3.5 h-3.5" /> Back to Landing Page
             </button>
@@ -207,7 +292,7 @@ export default function Page() {
             <button
               type="button"
               onClick={() => setViewMode("WORKSPACE")}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#272B27] text-white border border-[#272B27] hover:bg-[#3E453E] font-bold uppercase cursor-pointer tech-shadow-sm"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-[#272B27] text-white border border-[#272B27] hover:bg-[#3E453E] font-bold uppercase cursor-pointer tech-shadow-sm transition-all"
             >
               <Building2 className="w-3.5 h-3.5" /> Open Active Workspaces
             </button>
@@ -219,32 +304,48 @@ export default function Page() {
               {viewMode === "LANDING" ? "EDITORIAL LANDING" : "ROLE WORKSPACE"}
             </span>
           </div>
+
+          <Badge variant="outline" className="text-[10px] bg-amber-100/70 border-amber-800 text-amber-900 font-bold uppercase">
+            DEVELOPMENT TESTING
+          </Badge>
         </div>
 
-        {/* Active Account Identity Pill */}
-        {activeAccount ? (
-          <div className="hidden md:flex items-center gap-2 px-2.5 py-1 bg-white border border-[#272B27]/40 text-[#272B27]">
-            <span className="w-2 h-2 rounded-full bg-emerald-600" />
-            <span className="font-bold">{activeAccount.name}</span>
-            <span className="text-[#5B6158]">({activeAccount.roleLabel})</span>
+        {/* Demo Mode Toggle & Status */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleDemoMode}
+            className={`px-2 py-0.5 border font-mono text-[11px] font-bold uppercase transition-all cursor-pointer ${
+              isDemoMode
+                ? "bg-amber-500 text-white border-amber-700"
+                : "bg-white text-[#272B27] border-[#272B27] hover:bg-[#EEE8DC]"
+            }`}
+          >
+            {isDemoMode ? "Disable Demo Mode" : "Load Demo Data"}
+          </button>
+
+          {activeAccount ? (
+            <div className="hidden md:flex items-center gap-2 px-2.5 py-1 bg-white border border-[#272B27]/40 text-[#272B27]">
+              <span className="w-2 h-2 rounded-full bg-emerald-600" />
+              <span className="font-bold">{activeAccount.name}</span>
+              <span className="text-[#5B6158]">({activeAccount.roleLabel})</span>
+              <Link
+                href="/login"
+                className="text-[#D94B3D] hover:underline font-bold text-[10px] ml-1 uppercase"
+              >
+                [Switch]
+              </Link>
+            </div>
+          ) : (
             <Link
               href="/login"
-              className="text-[#D94B3D] hover:underline font-bold text-[10px] ml-1 uppercase"
+              className="hidden md:inline-flex items-center gap-1 text-[#272B27] hover:underline font-bold"
             >
-              [Switch / Sign In]
+              <LogIn className="w-3.5 h-3.5" /> Sign in
             </Link>
-          </div>
-        ) : (
-          <Link
-            href="/login"
-            className="hidden md:inline-flex items-center gap-1 text-[#272B27] hover:underline font-bold"
-          >
-            <LogIn className="w-3.5 h-3.5" /> Sign in with Sample Account
-          </Link>
-        )}
+          )}
 
-        {/* 12-Role Switcher dropdown */}
-        <div className="flex items-center gap-2">
+          {/* 12-Role Switcher dropdown */}
           <RoleSwitcher
             currentRole={currentRole}
             onRoleChange={handleRoleChange}
@@ -252,7 +353,45 @@ export default function Page() {
         </div>
       </div>
 
-      {/* Main Content Area with Smooth Page Transition */}
+      {/* Demo Mode Prominent Banner */}
+      {isDemoMode && (
+        <div className="w-full bg-amber-50 border-b border-amber-300 px-4 py-2 text-xs font-mono text-amber-900 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Info className="w-4 h-4 text-amber-700 shrink-0" />
+            <span>
+              <strong>DEMO MODE ACTIVE:</strong> Showing illustrative records for interface testing. These records are explicitly isolated and are not live campus incidents.
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={toggleDemoMode}
+            className="underline font-bold hover:text-amber-950 shrink-0"
+          >
+            Switch to Live Records
+          </button>
+        </div>
+      )}
+
+      {/* Network / API Error Notice with Retry */}
+      {fetchError && !isDemoMode && (
+        <div className="w-full bg-red-50 border-b border-red-300 px-4 py-2 text-xs font-mono text-red-900 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{fetchError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={loadIncidents}
+            disabled={isLoadingIncidents}
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 bg-red-600 text-white font-bold uppercase hover:bg-red-700 transition-all cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3 h-3 ${isLoadingIncidents ? "animate-spin" : ""}`} />
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Main Content Area */}
       <main className="flex-1">
         <AnimatePresence mode="wait">
           {viewMode === "LANDING" ? (
@@ -286,6 +425,14 @@ export default function Page() {
                 />
               )}
 
+              {/* Loading State Indicator */}
+              {isLoadingIncidents && (
+                <div className="p-4 bg-white border border-[#272B27] font-mono text-xs flex items-center justify-center gap-2 text-[#5B6158]">
+                  <RefreshCw className="w-4 h-4 animate-spin text-[#D94B3D]" />
+                  <span>Synchronizing incidents with campus response registry...</span>
+                </div>
+              )}
+
               {/* Render Active Role Workspace */}
               {currentRole === "student" && (
                 <StudentView
@@ -306,7 +453,6 @@ export default function Page() {
                 />
               )}
 
-              {/* Other 10 Department / Responder Workspaces */}
               {currentRole !== "student" && currentRole !== "campus_admin" && (
                 <DepartmentWorkspace
                   roleId={currentRole}

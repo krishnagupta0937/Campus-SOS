@@ -15,6 +15,8 @@ export interface DevDbData {
   auditLogs: any[];
   breakGlassRequests: any[];
   notifications: any[];
+  hotlines: any[];
+  settings: any[];
   [key: string]: any;
 }
 
@@ -33,6 +35,8 @@ export class DevStore {
     auditLogs: [],
     breakGlassRequests: [],
     notifications: [],
+    hotlines: [],
+    settings: [],
   };
 
   constructor() {
@@ -243,6 +247,55 @@ export class DevStore {
             leftAt: null,
           });
         }
+      }
+    }
+
+    // 3. Emergency Hotlines
+    const canonicalHotlines = [
+      {
+        id: 'hotline_police_01',
+        label: 'Central Campus Police & Security Control',
+        phone: '+91 1800-226-787',
+        description: '24/7 immediate security response and campus patrol dispatch',
+        sortOrder: 1,
+        is24x7: true,
+        isActive: true,
+      },
+      {
+        id: 'hotline_health_01',
+        label: 'Campus Health Clinic & Ambulance',
+        phone: '+91 1800-226-911',
+        description: 'Emergency trauma, ambulance dispatch, and round-the-clock medical triage',
+        sortOrder: 2,
+        is24x7: true,
+        isActive: true,
+      },
+      {
+        id: 'hotline_women_01',
+        label: 'Women Safety Cell & Confidential Support',
+        phone: '+91 1800-226-100',
+        description: 'Confidential reporting, crisis counseling, and physical safety escort',
+        sortOrder: 3,
+        is24x7: true,
+        isActive: true,
+      },
+      {
+        id: 'hotline_proctor_01',
+        label: 'Chief Proctor Grievance Helpline',
+        phone: '+91 1800-226-444',
+        description: 'Campus discipline, anti-ragging escalation, and student dispute resolution',
+        sortOrder: 4,
+        is24x7: true,
+        isActive: true,
+      },
+    ];
+
+    if (!this.data.hotlines) {
+      this.data.hotlines = [];
+    }
+    for (const h of canonicalHotlines) {
+      if (!this.data.hotlines.some((existing) => existing.id === h.id)) {
+        this.data.hotlines.push(h);
       }
     }
 

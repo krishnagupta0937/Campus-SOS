@@ -9,12 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { CampusMap, PREDEFINED_CAMPUS_LOCATIONS, type CampusLocation } from "@/components/map/campus-map";
 import { AlertTriangle, ShieldAlert, HeartPulse, Flame, PhoneCall, CheckCircle2, Upload, X, ArrowRight, ShieldCheck, Info } from "lucide-react";
 
-import { createEmergencySos } from "@/lib/api-client";
+import { createEmergencySos, type IncidentRecord } from "@/lib/api-client";
 
 interface EmergencySosModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onEmergencyConfirmed: (incident: any) => void;
+  onEmergencyConfirmed: (incident: IncidentRecord) => void;
 }
 
 export function EmergencySosModal({
@@ -30,6 +30,15 @@ export function EmergencySosModal({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [confirmedArm, setConfirmedArm] = React.useState(false);
   const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+
+  const handleClose = () => {
+    onOpenChange(false);
+    setStep("INTAKE");
+    setDescription("");
+    setPhotos([]);
+    setConfirmedArm(false);
+    setErrorMessage(null);
+  };
 
   // Real-time classification simulation matching AI taxonomy
   const classification = React.useMemo(() => {
@@ -113,14 +122,15 @@ export function EmergencySosModal({
       setDescription("");
       setPhotos([]);
       setConfirmedArm(false);
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsSubmitting(false);
-      setErrorMessage(err.message || "Failed to confirm emergency. Please notify security post directly.");
+      const msg = err instanceof Error ? err.message : "Failed to confirm emergency. Please notify security post directly.";
+      setErrorMessage(msg);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleClose}>
       <div className="flex flex-col gap-5 max-h-[85vh] overflow-y-auto pr-1">
         <DialogHeader className="border-b-2 border-[#D94B3D]/30 pb-3">
           <div className="flex items-center justify-between">
@@ -137,7 +147,7 @@ export function EmergencySosModal({
                 </DialogDescription>
               </div>
             </div>
-            <DialogCloseButton onClose={() => onOpenChange(false)} />
+            <DialogCloseButton onClose={handleClose} />
           </div>
 
           {/* Hotline Strip */}
@@ -340,7 +350,7 @@ export function EmergencySosModal({
                   <div>
                     <span className="text-[#5B6158]">DESCRIPTION: </span>
                     <span className="text-[#272B27] italic font-sans block mt-0.5">
-                      "{description}"
+                      &ldquo;{description}&rdquo;
                     </span>
                   </div>
                 </div>

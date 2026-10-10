@@ -29,42 +29,46 @@ import {
   FileText,
   Lock,
 } from "lucide-react";
+import { formatLocation, type IncidentRecord } from "@/lib/api-client";
+
+type DutyStatus = "AVAILABLE" | "BUSY" | "OFFLINE";
 
 interface DepartmentWorkspaceProps {
   roleId: RoleId;
-  incidents: any[];
+  incidents: IncidentRecord[];
 }
 
 export function DepartmentWorkspace({ roleId, incidents }: DepartmentWorkspaceProps) {
   const roleConfig = ROLES.find((r) => r.id === roleId) || ROLES[3];
-  const [dutyState, setDutyState] = React.useState<"AVAILABLE" | "BUSY" | "OFFLINE">("AVAILABLE");
-  const [selectedCase, setSelectedCase] = React.useState<any | null>(null);
+  const [dutyState, setDutyState] = React.useState<DutyStatus>("AVAILABLE");
+  const [selectedCase, setSelectedCase] = React.useState<IncidentRecord | null>(null);
 
   // Department-specific case filter
   const departmentCases = React.useMemo(() => {
+    const safe = Array.isArray(incidents) ? incidents : [];
     switch (roleId) {
       case "chief_proctor":
-        return incidents.filter((i) => i.category?.includes("MISCONDUCT") || i.category?.includes("DISCIPLINARY") || i.category?.includes("HARASSMENT"));
+        return safe.filter((i) => i.category?.includes("MISCONDUCT") || i.category?.includes("DISCIPLINARY") || i.category?.includes("HARASSMENT"));
       case "security":
-        return incidents.filter((i) => i.workflow === "EMERGENCY_SOS" || i.category?.includes("SECURITY") || i.category?.includes("MISCONDUCT") || i.category?.includes("FIRE"));
+        return safe.filter((i) => i.workflow === "EMERGENCY_SOS" || i.category?.includes("SECURITY") || i.category?.includes("MISCONDUCT") || i.category?.includes("FIRE"));
       case "medical":
-        return incidents.filter((i) => i.category?.includes("MEDICAL") || i.workflow === "EMERGENCY_SOS");
+        return safe.filter((i) => i.category?.includes("MEDICAL") || i.workflow === "EMERGENCY_SOS");
       case "fire_safety":
-        return incidents.filter((i) => i.category?.includes("FIRE") || i.category?.includes("HAZARD"));
+        return safe.filter((i) => i.category?.includes("FIRE") || i.category?.includes("HAZARD"));
       case "women_safety":
-        return incidents.filter((i) => i.category?.includes("WOMEN") || i.category?.includes("HARASSMENT"));
+        return safe.filter((i) => i.category?.includes("WOMEN") || i.category?.includes("HARASSMENT"));
       case "men_safety":
-        return incidents.filter((i) => i.category?.includes("MEN") || i.category?.includes("HARASSMENT"));
+        return safe.filter((i) => i.category?.includes("MEN") || i.category?.includes("HARASSMENT"));
       case "student_council":
-        return incidents.filter((i) => i.category?.includes("COMPLAINT") || i.category?.includes("STUDENT"));
+        return safe.filter((i) => i.category?.includes("COMPLAINT") || i.category?.includes("STUDENT"));
       case "facilities":
-        return incidents.filter((i) => i.category?.includes("INFRASTRUCTURE") || i.category?.includes("HAZARD"));
+        return safe.filter((i) => i.category?.includes("INFRASTRUCTURE") || i.category?.includes("HAZARD"));
       case "transport":
-        return incidents.filter((i) => i.category?.includes("TRAFFIC") || i.category?.includes("PARKING") || i.category?.includes("ROUTE"));
+        return safe.filter((i) => i.category?.includes("TRAFFIC") || i.category?.includes("PARKING") || i.category?.includes("ROUTE"));
       case "it_digital":
-        return incidents.filter((i) => i.category?.includes("DIGITAL") || i.category?.includes("CYBER"));
+        return safe.filter((i) => i.category?.includes("DIGITAL") || i.category?.includes("CYBER"));
       default:
-        return incidents;
+        return safe;
     }
   }, [roleId, incidents]);
 
@@ -108,7 +112,7 @@ export function DepartmentWorkspace({ roleId, incidents }: DepartmentWorkspacePr
               <button
                 key={item.id}
                 type="button"
-                onClick={() => setDutyState(item.id as any)}
+                onClick={() => setDutyState(item.id as DutyStatus)}
                 className={cn(
                   "relative px-3 py-1 font-bold uppercase transition-colors cursor-pointer",
                   isActive ? "text-white" : "text-[#272B27] hover:bg-[#E5DDCF]"
@@ -210,17 +214,17 @@ export function DepartmentWorkspace({ roleId, incidents }: DepartmentWorkspacePr
                         {inc.public_id}
                       </Badge>
                       <span className="text-xs font-bold text-[#272B27] uppercase">
-                        {inc.category_label}
+                        {inc.category_label || inc.category}
                       </span>
                       <span className="text-[10px] font-mono text-[#5B6158]">
-                        • {new Date(inc.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                        • {inc.created_at || inc.createdAt ? new Date(inc.created_at || inc.createdAt || 0).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—"}
                       </span>
                     </div>
                     <p className="text-xs text-[#272B27] font-semibold italic">
-                      "{inc.description}"
+                      &ldquo;{inc.description}&rdquo;
                     </p>
                     <p className="text-[11px] font-mono text-[#5B6158]">
-                      Location: <strong className="text-[#272B27]">{inc.location}</strong> • Status: <strong className="text-[#D94B3D]">{inc.status}</strong>
+                      Location: <strong className="text-[#272B27]">{formatLocation(inc.location)}</strong> • Status: <strong className="text-[#D94B3D]">{inc.status}</strong>
                     </p>
                   </div>
 
@@ -273,10 +277,10 @@ export function DepartmentWorkspace({ roleId, incidents }: DepartmentWorkspacePr
                   {selectedCase.category_label}
                 </p>
                 <p className="font-sans text-[#272B27] italic text-sm">
-                  "{selectedCase.description}"
+                  &ldquo;{selectedCase.description}&rdquo;
                 </p>
                 <p className="text-[#5B6158] pt-1">
-                  Location: {selectedCase.location} (Coordinates X: {(selectedCase.pin?.x * 100 || 50).toFixed(1)}%, Y: {(selectedCase.pin?.y * 100 || 22).toFixed(1)}%)
+                  Location: {formatLocation(selectedCase.location)} (Coordinates X: {((selectedCase.pin?.x ?? 0.5) * 100).toFixed(1)}%, Y: {((selectedCase.pin?.y ?? 0.22) * 100).toFixed(1)}%)
                 </p>
               </div>
 

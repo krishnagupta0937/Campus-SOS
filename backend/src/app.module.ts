@@ -24,6 +24,8 @@ import { AuditModule } from './modules/audit/audit.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { AccessPolicyModule } from './modules/access-policy/access-policy.module';
 import { HealthModule } from './modules/health/health.module';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
 
 @Module({
   imports: [
@@ -86,5 +88,7 @@ import { HealthModule } from './modules/health/health.module';
     SettingsModule,
     HealthModule,
   ],
+  controllers: [AppController],
+  providers: [AppService],
 })
 export class AppModule {}

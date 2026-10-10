@@ -80,17 +80,17 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
       this.connectedUsers.set(payload.sub, userSockets);
 
       // Auto-join personal channel
-      client.join(`user:${payload.sub}`);
+      void client.join(`user:${payload.sub}`);
 
       // Auto-join team channels
       for (const tm of payload.teamMemberships || []) {
-        client.join(`team:${tm.teamId}`);
+        void client.join(`team:${tm.teamId}`);
       }
 
       // Admin gets dispatch board channel
       if (payload.role === 'CAMPUS_ADMIN') {
-        client.join('admin:dispatch');
-        client.join('admin:incidents');
+        void client.join('admin:dispatch');
+        void client.join('admin:incidents');
       }
     } catch {
       client.disconnect();
@@ -126,7 +126,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
         return { event: 'error', data: { message: 'Unauthorized: REALTIME_ACCESS required' } };
       }
     }
-    client.join(`incident:${data.incident_id}`);
+    void client.join(`incident:${data.incident_id}`);
     return { event: 'subscribed', data: { channel: `incident:${data.incident_id}` } };
   }
 
@@ -138,7 +138,7 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { incident_id: string },
   ) {
-    client.leave(`incident:${data.incident_id}`);
+    void client.leave(`incident:${data.incident_id}`);
     return { event: 'unsubscribed', data: { channel: `incident:${data.incident_id}` } };
   }
 
