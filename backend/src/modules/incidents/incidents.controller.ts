@@ -63,8 +63,12 @@ export class IncidentsController {
     @Query('category') category?: string,
     @Query('assigned_to_me') assignedToMe?: boolean,
   ) {
-    // Team members see incidents routed to their team
-    return [];
+    return this.incidentsService.getTeamIncidents(user, {
+      status,
+      workflow,
+      category,
+      assigned_to_me: assignedToMe,
+    });
   }
 
   @Get('team/incidents/:id')
@@ -72,7 +76,7 @@ export class IncidentsController {
     @Param('id') incidentId: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return {};
+    return this.incidentsService.getTeamIncidentDetail(incidentId, user);
   }
 
   @Post('team/incidents/:id/status')

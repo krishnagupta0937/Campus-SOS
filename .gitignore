@@ -43,3 +43,15 @@ coverage/
 # Temporary
 scratch/
 tmp/
+comments
+
+# Runtime data & uploads
+backend/data/
+uploads/
+frontend/public/uploads/*
+!frontend/public/uploads/.gitkeep
+
+# Local references and agent configs
+frontend refrence/
+.agent/
+.agents/

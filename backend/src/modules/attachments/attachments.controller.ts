@@ -33,6 +33,26 @@ export class AttachmentsController {
   }
 
   /**
+   * POST /attachments/:id/upload
+   * Direct file upload (base64 payload) for dev / fallback mode.
+   */
+  @Post(':id/upload')
+  @HttpCode(HttpStatus.OK)
+  async directUpload(
+    @Param('id') id: string,
+    @CurrentUser('id') userId: string,
+    @Body() body: { data_base64: string; mime_type?: string },
+  ) {
+    const buffer = Buffer.from(body.data_base64, 'base64');
+    return this.attachmentsService.handleDirectUpload(
+      id,
+      userId,
+      buffer,
+      body.mime_type || 'image/jpeg',
+    );
+  }
+
+  /**
    * POST /attachments/:id/complete
    * Finalize upload after client uploads to presigned URL.
    */

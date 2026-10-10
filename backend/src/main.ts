@@ -4,6 +4,19 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AppModule } from './app.module';
 
+process.on('uncaughtException', (err: any) => {
+  if (err?.message?.includes('Connection is closed') || err?.message?.includes('ECONNREFUSED')) {
+    return;
+  }
+  console.error('Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason: any) => {
+  if (reason?.message?.includes('Connection is closed') || reason?.message?.includes('ECONNREFUSED')) {
+    return;
+  }
+  console.error('Unhandled Rejection:', reason);
+});
+
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
@@ -17,9 +30,16 @@ async function bootstrap() {
   app.setGlobalPrefix(prefix);
 
   // CORS
-  const corsOrigin = config.get<string>('CORS_ORIGIN', 'http://localhost:5173');
+  const configuredOrigin = config.get<string>('CORS_ORIGIN', 'http://localhost:3000');
   app.enableCors({
-    origin: corsOrigin,
+    origin: (origin, cb) => {
+      // Allow requests from localhost frontend or tools without origin header
+      if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1')) {
+        cb(null, true);
+      } else {
+        cb(null, configuredOrigin);
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
@@ -45,7 +65,7 @@ async function bootstrap() {
   await app.listen(port, '0.0.0.0');
   console.log(`🚀 Campus SOS Backend running on port ${port}`);
   console.log(`📡 API prefix: ${prefix}`);
-  console.log(`🌍 CORS origin: ${corsOrigin}`);
+  console.log(`🌍 CORS origin: ${configuredOrigin}`);
 }
 
 bootstrap();

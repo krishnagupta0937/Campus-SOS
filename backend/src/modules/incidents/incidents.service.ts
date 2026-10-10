@@ -1,6 +1,6 @@
 import {
   Injectable, NotFoundException, ConflictException,
-  BadRequestException, HttpException, HttpStatus,
+  BadRequestException, ForbiddenException, HttpException, HttpStatus,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -118,7 +118,7 @@ export class IncidentsService {
     const publicId = generatePublicId('EMERGENCY_SOS', count + 1);
 
     // Atomic transaction: incident + location + outbox + audit
-    const result = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx: any) => {
       const incident = await tx.incident.create({
         data: {
           publicId,
@@ -267,7 +267,23 @@ export class IncidentsService {
     const count = await this.prisma.incident.count({ where: { workflow: 'STANDARD_REPORT' } });
     const publicId = generatePublicId('STANDARD_REPORT', count + 1);
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    // Map category to designated response team
+    const categoryToTeamCode: Record<string, string> = {
+      INFRASTRUCTURE: 'INFRASTRUCTURE',
+      STUDENT_MISCONDUCT: 'CHIEF_PROCTOR',
+      FACULTY_STAFF_MISCONDUCT: 'CHIEF_PROCTOR',
+      WOMEN_HARASSMENT: 'WOMEN_SAFETY',
+      MEN_HARASSMENT: 'MEN_SAFETY',
+      DIGITAL_CYBER: 'IT_DIGITAL',
+      TRAFFIC_PARKING: 'TRANSPORTATION',
+      GENERAL_COMPLAINT: 'CAMPUS_ADMIN',
+      FIRE_HAZARD: 'FIRE_SAFETY',
+    };
+
+    const primaryTeamCode = categoryToTeamCode[data.category] || 'CAMPUS_ADMIN';
+    const isRestricted = ['WOMEN_HARASSMENT', 'MEN_HARASSMENT', 'FACULTY_STAFF_MISCONDUCT'].includes(data.category);
+
+    const result = await this.prisma.$transaction(async (tx: any) => {
       const incident = await tx.incident.create({
         data: {
           publicId,
@@ -276,7 +292,10 @@ export class IncidentsService {
           createdById: reporterId,
           description: data.description,
           studentCategory: data.category,
-          status: 'CREATED',
+          finalCategory: data.category,
+          status: 'TEAMS_NOTIFIED',
+          isRestricted,
+          firstTeamNotifiedAt: new Date(),
           idempotencyKey,
         },
       });
@@ -309,6 +328,40 @@ export class IncidentsService {
         }
       }
 
+      // Link assigned teams and generate notifications
+      const teamCodes = Array.from(new Set([primaryTeamCode, 'CAMPUS_ADMIN']));
+      for (const tCode of teamCodes) {
+        const team = await tx.team.findFirst({ where: { code: tCode } });
+        if (team) {
+          await tx.incidentTeam.create({
+            data: {
+              incidentId: incident.id,
+              teamId: team.id,
+              role: tCode === primaryTeamCode ? 'ACT' : 'KNOW',
+            },
+          }).catch(() => null);
+
+          // Deliver in-app notification to team members
+          const members = await tx.teamMember.findMany({
+            where: { teamId: team.id, leftAt: null },
+          });
+          for (const m of members) {
+            await tx.notification.create({
+              data: {
+                recipientUserId: m.userId,
+                recipientId: m.userId,
+                incidentId: incident.id,
+                audienceType: 'RESPONDER',
+                channel: 'IN_APP',
+                deliveryStatus: 'DELIVERED',
+                title: `New Incident Assigned: ${publicId}`,
+                body: `${data.description.substring(0, 100)}`,
+              },
+            }).catch(() => null);
+          }
+        }
+      }
+
       // Outbox event
       await tx.outboxEvent.create({
         data: {
@@ -320,6 +373,7 @@ export class IncidentsService {
             public_id: publicId,
             reporter_id: reporterId,
             student_category: data.category,
+            routed_teams: teamCodes,
           },
         },
       });
@@ -474,15 +528,15 @@ export class IncidentsService {
           : null,
         text: incident.location.locationText,
       } : null,
-      assigned_teams: incident.incidentTeams.map(it => ({
-        team_name: it.team.name,
+      assigned_teams: (incident.incidentTeams || []).map((it: any) => ({
+        team_name: it.team?.name || 'Campus Team',
       })),
-      photos: incident.attachments.map(a => ({
+      photos: (incident.attachments || []).map((a: any) => ({
         id: a.id,
         position: a.position,
         url_endpoint: `/attachments/${a.id}/url`,
       })),
-      timeline: incident.statusHistory.map(sh => ({
+      timeline: (incident.statusHistory || []).map((sh: any) => ({
         from: sh.fromStatus,
         to: sh.toStatus,
         at: sh.createdAt,
@@ -531,7 +585,7 @@ export class IncidentsService {
       updateData.resolvedAt = new Date();
     }
 
-    const updated = await this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx: any) => {
       const result = await tx.incident.update({
         where: { id: incidentId },
         data: updateData,
@@ -781,5 +835,92 @@ export class IncidentsService {
       })),
       next_cursor: hasMore ? data[data.length - 1].id : null,
     };
+  }
+
+  /**
+   * Get team-specific incidents based on user role and team membership.
+   */
+  async getTeamIncidents(
+    user: any,
+    query: { status?: string; workflow?: string; category?: string; assigned_to_me?: boolean },
+  ) {
+    const isAdmin = user.role === 'CAMPUS_ADMIN';
+    const isProctor = user.role === 'CHIEF_PROCTOR';
+    const userTeamIds = (user.teamMemberships || []).map((tm: any) => tm.teamId);
+
+    const where: any = {};
+    if (query.status) where.status = query.status;
+    if (query.workflow) where.workflow = query.workflow;
+
+    if (!isAdmin && !isProctor) {
+      where.OR = [
+        { incidentTeams: { some: { teamId: { in: userTeamIds }, revokedAt: null } } },
+        { assignedTeam: { id: { in: userTeamIds } } },
+      ];
+    }
+
+    return this.prisma.incident.findMany({
+      where,
+      include: {
+        location: true,
+        attachments: true,
+        incidentTeams: { include: { team: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  /**
+   * Get team-specific incident detail with access control.
+   */
+  async getTeamIncidentDetail(incidentId: string, user: any) {
+    const incident = await this.prisma.incident.findUnique({
+      where: { id: incidentId },
+      include: {
+        reporter: {
+          select: { id: true, fullName: true, email: true },
+        },
+        location: true,
+        attachments: true,
+        incidentTeams: { include: { team: true } },
+        statusHistory: true,
+      },
+    });
+
+    if (!incident) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
+    }
+
+    const isAdmin = user.role === 'CAMPUS_ADMIN';
+    const isProctor = user.role === 'CHIEF_PROCTOR';
+    const isReporter = incident.reporterId === user.id;
+    const userTeamIds = (user.teamMemberships || []).map((tm: any) => tm.teamId);
+    const isAssigned = incident.incidentTeams?.some((it: any) => userTeamIds.includes(it.teamId));
+
+    if (!isAdmin && !isProctor && !isReporter && !isAssigned) {
+      throw new ForbiddenException({
+        code: 'FORBIDDEN',
+        message: 'You are not authorized to view this confidential incident',
+      });
+    }
+
+    return incident;
+  }
+
+  async addTeamNote(incidentId: string, userId: string, note: string) {
+    const incident = await this.prisma.incident.findUnique({ where: { id: incidentId } });
+    if (!incident) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
+    }
+
+    await this.auditService.log({
+      eventType: 'NOTE_ADDED',
+      incidentId,
+      actorUserId: userId,
+      actorKind: 'USER',
+      details: { note },
+    });
+
+    return { added: true, incident_id: incidentId };
   }
 }

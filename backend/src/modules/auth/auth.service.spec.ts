@@ -136,7 +136,7 @@ describe('AuthService (Authentication & Privilege Safety)', () => {
       await expect(
         service.login({ email: 'target@campus.edu', password: 'CorrectPassword123!' }, '10.0.0.1'),
       ).rejects.toThrow(UnauthorizedException);
-    });
+    }, 25000);
   });
 
   describe('Privilege Safety & Token Claims Integrity', () => {

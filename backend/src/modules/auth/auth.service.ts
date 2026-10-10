@@ -164,10 +164,10 @@ export class AuthService {
       user_type: user.userType,
       mfa_enabled: user.mfaEnabled,
       notifications_enabled: user.notificationsEnabled,
-      teams: user.teamMembers.map(tm => ({
-        team_id: tm.team.id,
-        team_code: tm.team.code,
-        team_name: tm.team.name,
+      teams: (user.teamMembers || []).map((tm: any) => ({
+        team_id: tm.team?.id || tm.teamId,
+        team_code: tm.team?.code || tm.teamCode,
+        team_name: tm.team?.name || 'Campus Team',
         designation: tm.designation,
         is_coordinator: tm.isCoordinator,
       })),
@@ -196,12 +196,12 @@ export class AuthService {
   }
 
   private async generateAuthResponse(user: any, rotatedFrom?: string) {
-    const teamMemberships = user.teamMembers.map((tm: any) => ({
-      teamId: tm.team.id,
-      teamCode: tm.team.code,
+    const teamMemberships = (user.teamMembers || []).map((tm: any) => ({
+      teamId: tm.team?.id || tm.teamId,
+      teamCode: tm.team?.code || tm.teamCode,
       memberId: tm.id,
-      isCoordinator: tm.isCoordinator,
-      canViewRestricted: tm.canViewRestricted,
+      isCoordinator: tm.isCoordinator || false,
+      canViewRestricted: tm.canViewRestricted || false,
     }));
 
     const payload: AuthUser = {

@@ -48,12 +48,20 @@ import { HealthModule } from './modules/health/health.module';
     // BullMQ queues
     BullModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        connection: {
-          host: new URL(config.get<string>('REDIS_URL', 'redis://localhost:6379')).hostname,
-          port: parseInt(new URL(config.get<string>('REDIS_URL', 'redis://localhost:6379')).port || '6379'),
-        },
-      }),
+      useFactory: (config: ConfigService) => {
+        const redisUrl = config.get<string>('REDIS_URL', 'redis://localhost:6379');
+        const parsed = new URL(redisUrl);
+        return {
+          connection: {
+            host: parsed.hostname,
+            port: parseInt(parsed.port || '6379'),
+            lazyConnect: true,
+            maxRetriesPerRequest: null,
+            enableOfflineQueue: false,
+            retryStrategy: () => null,
+          },
+        };
+      },
     }),
 
     // Database

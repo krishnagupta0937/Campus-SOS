@@ -1,0 +1,139 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: var(--font-sans);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+    --color-ivory: #F5F1E8;
+    --color-beige: #EEE8DC;
+    --color-sage: #E6ECE5;
+    --color-charcoal: #272B27;
+    --color-emergency: #D94B3D;
+    --color-emergency-hover: #BF3A2E;
+    --color-emergency-soft: #FCEBE9;
+    --color-blue-muted: #647F9C;
+    --color-white: #FFFFFF;
+}
+
+:root {
+    --background: #F5F1E8;
+    --foreground: #272B27;
+    --card: #FFFFFF;
+    --card-foreground: #272B27;
+    --popover: #FFFFFF;
+    --popover-foreground: #272B27;
+    --primary: #272B27;
+    --primary-foreground: #F5F1E8;
+    --secondary: #EEE8DC;
+    --secondary-foreground: #272B27;
+    --muted: #EEE8DC;
+    --muted-foreground: #5B6158;
+    --accent: #E6ECE5;
+    --accent-foreground: #272B27;
+    --destructive: #D94B3D;
+    --destructive-foreground: #FFFFFF;
+    --border: #DCD6C9;
+    --input: #DCD6C9;
+    --ring: #272B27;
+    --radius: 0.25rem;
+}
+
+.dark {
+    --background: #191C19;
+    --foreground: #F5F1E8;
+    --card: #222622;
+    --card-foreground: #F5F1E8;
+    --popover: #222622;
+    --popover-foreground: #F5F1E8;
+    --primary: #F5F1E8;
+    --primary-foreground: #191C19;
+    --secondary: #2C312C;
+    --secondary-foreground: #F5F1E8;
+    --muted: #2C312C;
+    --muted-foreground: #9EA89E;
+    --accent: #2A332B;
+    --accent-foreground: #F5F1E8;
+    --destructive: #E55345;
+    --destructive-foreground: #FFFFFF;
+    --border: #3A403A;
+    --input: #3A403A;
+    --ring: #9EA89E;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground min-h-screen antialiased selection:bg-[#272B27] selection:text-[#F5F1E8];
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  html {
+    color-scheme: light dark;
+  }
+}
+
+/* Editorial crosshairs & technical lines */
+.tech-grid {
+  background-size: 24px 24px;
+  background-image: 
+    linear-gradient(to right, rgba(39, 43, 39, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(39, 43, 39, 0.05) 1px, transparent 1px);
+}
+
+.tech-border {
+  border: 1px solid #272B27;
+}
+
+.tech-shadow {
+  box-shadow: 3px 3px 0px #272B27;
+}
+
+.tech-shadow-sm {
+  box-shadow: 2px 2px 0px #272B27;
+}
+
+.tech-shadow-emergency {
+  box-shadow: 3px 3px 0px #D94B3D;
+}

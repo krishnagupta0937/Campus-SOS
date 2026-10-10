@@ -195,7 +195,7 @@ export class DispatchService {
     }
 
     // Accept and cancel others
-    await this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx: any) => {
       // Check if slot has already been claimed by another responder concurrently
       const existingAccepted = await tx.assignment.findFirst({
         where: {
