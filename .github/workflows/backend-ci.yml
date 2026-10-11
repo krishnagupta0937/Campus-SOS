@@ -1,0 +1,70 @@
+name: Backend CI & PostgreSQL Concurrency
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build, Unit Tests & Real PostgreSQL Concurrency
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: campus_sos_app
+          POSTGRES_PASSWORD: secret_password
+          POSTGRES_DB: campus_sos_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U campus_sos_app -d campus_sos_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Build Backend
+        run: npm run build
+
+      - name: Run Unit Tests (Separated)
+        run: npm test
+
+      - name: Apply Database Migrations to PostgreSQL
+        env:
+          DATABASE_URL: postgresql://campus_sos_app:secret_password@localhost:5432/campus_sos_test?schema=public
+        run: npx prisma migrate deploy
+
+      - name: Run PostgreSQL Outbox Concurrency Integration Test
+        env:
+          TEST_DATABASE_URL: postgresql://campus_sos_app:secret_password@localhost:5432/campus_sos_test?schema=public
+          REQUIRE_POSTGRES: "true"
+        run: npm run test:integration:pg
+
+      - name: Run Full E2E Test Suite
+        env:
+          TEST_DATABASE_URL: postgresql://campus_sos_app:secret_password@localhost:5432/campus_sos_test?schema=public
+        run: npm run test:e2e
