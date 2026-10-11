@@ -473,6 +473,8 @@ export class IncidentsService {
           data: {
             eventType: 'incident.created',
             aggregateId: incident.id,
+            status: 'PENDING',
+            attempts: 0,
             payload: {
               incident_id: incident.id,
               workflow: 'EMERGENCY_SOS',
@@ -557,6 +559,8 @@ export class IncidentsService {
     }
 
     // Enqueue for background processing (non-blocking)
+    let queueEnqueueFailed = false;
+    let queueErrorMessage: string | null = null;
     try {
       if (this.sosQueue) {
         await this.sosQueue.add('process-sos', {
@@ -569,7 +573,40 @@ export class IncidentsService {
         });
       }
     } catch (queueErr: any) {
-      this.logger.warn(`Failed to enqueue SOS job for incident ${result.id}: ${queueErr?.message}`);
+      queueEnqueueFailed = true;
+      queueErrorMessage = queueErr?.message || String(queueErr);
+      this.logger.warn(`Failed to enqueue SOS job for incident ${result.id}: ${queueErrorMessage}`);
+    }
+
+    if (queueEnqueueFailed) {
+      // Record auditable operational alert
+      await this.auditService.log({
+        eventType: 'ESCALATED',
+        incidentId: result.id,
+        actorKind: 'SYSTEM',
+        details: {
+          reason: 'QUEUE_ENQUEUE_FAILED',
+          queue: 'sos-critical',
+          error: queueErrorMessage,
+          action: 'RECONCILER_FALLBACK',
+          preservation: 'INCIDENT_AND_OUTBOX_RECORD_PRESERVED',
+        },
+      });
+
+      return {
+        incident: {
+          id: result.id,
+          public_id: result.publicId,
+          status: result.status,
+          workflow: result.workflow,
+          queue_status: 'DEGRADED',
+          dispatch_status: 'PENDING_RECONCILIATION',
+        },
+        live_channel: `incident:${result.id}`,
+        queue_status: 'DEGRADED',
+        dispatch_status: 'PENDING_RECONCILIATION',
+        warning: 'Emergency queue unavailable. Incident preserved in transactional outbox for reliable recovery.',
+      };
     }
 
     return {
@@ -578,8 +615,12 @@ export class IncidentsService {
         public_id: result.publicId,
         status: result.status,
         workflow: result.workflow,
+        queue_status: 'ENQUEUED',
+        dispatch_status: 'ACTIVE',
       },
       live_channel: `incident:${result.id}`,
+      queue_status: 'ENQUEUED',
+      dispatch_status: 'ACTIVE',
     };
   }
 
@@ -973,6 +1014,8 @@ export class IncidentsService {
           data: {
             eventType: 'incident.created',
             aggregateId: incident.id,
+            status: 'PENDING',
+            attempts: 0,
             payload: {
               incident_id: incident.id,
               workflow: 'STANDARD_REPORT',
@@ -1041,6 +1084,8 @@ export class IncidentsService {
     }
 
     // Enqueue
+    let queueEnqueueFailed = false;
+    let queueErrorMessage: string | null = null;
     try {
       if (this.standardQueue) {
         await this.standardQueue.add('process-standard', {
@@ -1052,16 +1097,52 @@ export class IncidentsService {
         });
       }
     } catch (queueErr: any) {
-      this.logger.warn(`Failed to enqueue standard report job for incident ${result.id}: ${queueErr?.message}`);
+      queueEnqueueFailed = true;
+      queueErrorMessage = queueErr?.message || String(queueErr);
+      this.logger.warn(`Failed to enqueue standard report job for incident ${result.id}: ${queueErrorMessage}`);
+    }
+
+    if (queueEnqueueFailed) {
+      // Record auditable operational alert
+      await this.auditService.log({
+        eventType: 'ESCALATED',
+        incidentId: result.id,
+        actorKind: 'SYSTEM',
+        details: {
+          reason: 'QUEUE_ENQUEUE_FAILED',
+          queue: 'standard',
+          error: queueErrorMessage,
+          action: 'RECONCILER_FALLBACK',
+          preservation: 'INCIDENT_AND_OUTBOX_RECORD_PRESERVED',
+        },
+      });
+
+      return {
+        incident: {
+          id: result.id,
+          public_id: result.publicId || publicId,
+          status: result.status,
+          workflow: result.workflow,
+          queue_status: 'DEGRADED',
+          dispatch_status: 'PENDING_RECONCILIATION',
+        },
+        queue_status: 'DEGRADED',
+        dispatch_status: 'PENDING_RECONCILIATION',
+        warning: 'Standard report queue unavailable. Incident preserved in transactional outbox for reliable recovery.',
+      };
     }
 
     return {
       incident: {
         id: result.id,
-        public_id: result.publicId,
+        public_id: result.publicId || publicId,
         status: result.status,
         workflow: result.workflow,
+        queue_status: 'ENQUEUED',
+        dispatch_status: 'ACTIVE',
       },
+      queue_status: 'ENQUEUED',
+      dispatch_status: 'ACTIVE',
     };
   }
 

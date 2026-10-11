@@ -9,6 +9,8 @@ import { AiModule } from '../ai/ai.module';
 import { RoutingModule } from '../routing/routing.module';
 import { DispatchModule } from '../dispatch/dispatch.module';
 import { StandardProcessor, SosProcessor } from './incidents.processor';
+import { OutboxProcessorService } from './outbox-processor.service';
+import { OutboxReconcilerService } from './outbox-reconciler.service';
 
 @Module({
   imports: [
@@ -23,7 +25,13 @@ import { StandardProcessor, SosProcessor } from './incidents.processor';
     ),
   ],
   controllers: [IncidentsController, SosController],
-  providers: [IncidentsService, StandardProcessor, SosProcessor],
-  exports: [IncidentsService],
+  providers: [
+    IncidentsService,
+    StandardProcessor,
+    SosProcessor,
+    OutboxProcessorService,
+    OutboxReconcilerService,
+  ],
+  exports: [IncidentsService, OutboxProcessorService, OutboxReconcilerService],
 })
 export class IncidentsModule {}

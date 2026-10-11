@@ -195,6 +195,107 @@ describe('IncidentsService (SOS Fast Path, Idempotency & State Machine)', () => 
     });
   });
 
+  describe('Queue Submission Failure Resilience & Degraded State Observability (P1)', () => {
+    it('should preserve SOS emergency record in DB and return degraded status with operational alert when sosQueue fails', async () => {
+      mockPrisma.incident.findUnique.mockResolvedValue(null);
+      mockPrisma.incidentDraft.findFirst.mockResolvedValue({
+        id: 'draft-qfail-1',
+        reporterId: 'user-1',
+        workflow: 'EMERGENCY_SOS',
+        expiresAt: new Date(Date.now() + 60000),
+        payload: { description: 'Fire alarm ringing on floor 3' },
+      });
+
+      mockPrisma.incident.create.mockResolvedValue({
+        id: 'inc-sos-qfail',
+        publicId: 'SOS-2026-000999',
+        status: 'CREATED',
+        workflow: 'EMERGENCY_SOS',
+      });
+
+      // Simulate Redis / BullMQ outage
+      mockSosQueue.add.mockRejectedValueOnce(new Error('Redis connection refused'));
+
+      const result = await service.confirmSosDraft('draft-qfail-1', 'user-1', 'idemp-qfail-1');
+
+      // Incident record and outbox event were preserved
+      expect(result.incident.public_id).toBe('SOS-2026-000999');
+      expect(mockPrisma.outboxEvent.create).toHaveBeenCalled();
+      expect(mockPrisma.incidentDraft.delete).toHaveBeenCalled();
+
+      // Observable degraded status returned
+      expect(result.queue_status).toBe('DEGRADED');
+      expect(result.dispatch_status).toBe('PENDING_RECONCILIATION');
+      expect(result.warning).toBeDefined();
+
+      // Auditable operational alert logged
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'ESCALATED',
+          incidentId: 'inc-sos-qfail',
+          actorKind: 'SYSTEM',
+          details: expect.objectContaining({
+            reason: 'QUEUE_ENQUEUE_FAILED',
+            queue: 'sos-critical',
+          }),
+        }),
+      );
+    });
+
+    it('should preserve standard report in DB and return degraded status with operational alert when standardQueue fails', async () => {
+      mockPrisma.incident.findUnique.mockResolvedValue(null);
+      mockPrisma.incident.create.mockResolvedValue({
+        id: 'inc-std-qfail',
+        publicId: 'REP-2026-000888',
+        status: 'CREATED',
+        workflow: 'STANDARD_REPORT',
+      });
+      mockPrisma.incident.update.mockResolvedValueOnce({
+        id: 'inc-std-qfail',
+        publicId: 'REP-2026-000888',
+        status: 'TEAMS_NOTIFIED',
+        workflow: 'STANDARD_REPORT',
+      });
+
+      // Simulate standard queue outage
+      mockStandardQueue.add.mockRejectedValueOnce(new Error('Redis connection closed'));
+
+      const result = await service.createStandardReport(
+        'user-1',
+        {
+          description: 'Water leakage in corridor',
+          category: 'INFRASTRUCTURE_HAZARD',
+          location: { kind: 'BLOCK', text: 'Block C' },
+          pin: { x: 0.3, y: 0.4 },
+          attachment_ids: [],
+        },
+        'idemp-std-qfail',
+      );
+
+      // Report and outbox event were preserved
+      expect(result.incident.public_id).toBe('REP-2026-000888');
+      expect(mockPrisma.outboxEvent.create).toHaveBeenCalled();
+
+      // Observable degraded status returned
+      expect(result.queue_status).toBe('DEGRADED');
+      expect(result.dispatch_status).toBe('PENDING_RECONCILIATION');
+      expect(result.warning).toBeDefined();
+
+      // Auditable operational alert logged
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'ESCALATED',
+          incidentId: 'inc-std-qfail',
+          actorKind: 'SYSTEM',
+          details: expect.objectContaining({
+            reason: 'QUEUE_ENQUEUE_FAILED',
+            queue: 'standard',
+          }),
+        }),
+      );
+    });
+  });
+
   describe('Standard Report Photo Limit & Validation', () => {
     it('should reject standard report with > 2 photos with 422 PHOTO_LIMIT_EXCEEDED', async () => {
       mockPrisma.incident.findUnique.mockResolvedValue(null);

@@ -3,10 +3,12 @@ import { Job } from 'bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { OutboxProcessorService } from './outbox-processor.service';
 
 /**
  * Standard Queue Processor for process-standard jobs.
- * Consumes queued standard reports, processes pending outbox events, and logs worker audit trail.
+ * Consumes queued standard reports, executes event-specific outbox handlers,
+ * and maintains worker audit trail.
  */
 @Processor('standard')
 @Injectable()
@@ -16,6 +18,7 @@ export class StandardProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly outboxProcessor: OutboxProcessorService,
   ) {
     super();
   }
@@ -41,20 +44,21 @@ export class StandardProcessor extends WorkerHost {
       throw new Error(`Incident ${incident_id} not found`);
     }
 
-    // Process and mark outbox events as processed
-    let processedOutboxEvents = 0;
-    if (this.prisma.outboxEvent?.updateMany) {
-      const updateRes = await this.prisma.outboxEvent.updateMany({
-        where: {
-          aggregateId: incident.id,
-          processed: false,
-        },
-        data: {
-          processed: true,
-          processedAt: new Date(),
-        },
-      });
-      processedOutboxEvents = updateRes?.count ?? 0;
+    // Process outbox events individually with verified operations and concurrency lock
+    const outboxResult = await this.outboxProcessor.processIncidentEvents(
+      incident.id,
+      `standard-worker-${job.id}`,
+      workflow || 'STANDARD_REPORT',
+    );
+
+    // If any event failed, preserve failure and trigger queue retry
+    if (outboxResult.failedCount > 0) {
+      const errDetails = outboxResult.results
+        .filter((r) => !r.success)
+        .map((r) => `${r.eventId}: ${r.error}`)
+        .join('; ');
+      this.logger.error(`Standard processor failed for incident ${incident.id}: ${errDetails}`);
+      throw new Error(`Outbox event execution failed: ${errDetails}`);
     }
 
     // Record worker audit event
@@ -67,7 +71,7 @@ export class StandardProcessor extends WorkerHost {
         queue: 'standard',
         workflow: workflow || 'STANDARD_REPORT',
         teams_assigned: incident.incidentTeams?.length || 0,
-        outbox_events_processed: processedOutboxEvents,
+        outbox_events_processed: outboxResult.processedCount,
       },
     });
 
@@ -76,7 +80,8 @@ export class StandardProcessor extends WorkerHost {
       incidentId: incident.id,
       publicId: incident.publicId,
       teamsAssigned: incident.incidentTeams?.length || 0,
-      outboxEventsProcessed: processedOutboxEvents,
+      outboxEventsProcessed: outboxResult.processedCount,
+      outboxResults: outboxResult.results,
       processedAt: new Date().toISOString(),
     };
   }
@@ -84,7 +89,8 @@ export class StandardProcessor extends WorkerHost {
 
 /**
  * SOS Queue Processor for process-sos jobs on sos-critical queue.
- * Consumes critical emergency jobs, processes outbox events, and logs worker audit trail.
+ * Consumes critical emergency jobs, executes event-specific operations,
+ * and maintains worker audit trail.
  */
 @Processor('sos-critical')
 @Injectable()
@@ -94,6 +100,7 @@ export class SosProcessor extends WorkerHost {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
+    private readonly outboxProcessor: OutboxProcessorService,
   ) {
     super();
   }
@@ -119,20 +126,21 @@ export class SosProcessor extends WorkerHost {
       throw new Error(`Incident ${incident_id} not found`);
     }
 
-    // Process and mark outbox events as processed
-    let processedOutboxEvents = 0;
-    if (this.prisma.outboxEvent?.updateMany) {
-      const updateRes = await this.prisma.outboxEvent.updateMany({
-        where: {
-          aggregateId: incident.id,
-          processed: false,
-        },
-        data: {
-          processed: true,
-          processedAt: new Date(),
-        },
-      });
-      processedOutboxEvents = updateRes?.count ?? 0;
+    // Process outbox events individually with verified operations and concurrency lock
+    const outboxResult = await this.outboxProcessor.processIncidentEvents(
+      incident.id,
+      `sos-worker-${job.id}`,
+      workflow || 'EMERGENCY_SOS',
+    );
+
+    // If any event failed, preserve failure and trigger queue retry
+    if (outboxResult.failedCount > 0) {
+      const errDetails = outboxResult.results
+        .filter((r) => !r.success)
+        .map((r) => `${r.eventId}: ${r.error}`)
+        .join('; ');
+      this.logger.error(`SOS processor failed for incident ${incident.id}: ${errDetails}`);
+      throw new Error(`SOS outbox event execution failed: ${errDetails}`);
     }
 
     // Record worker audit event
@@ -145,7 +153,7 @@ export class SosProcessor extends WorkerHost {
         queue: 'sos-critical',
         workflow: workflow || 'EMERGENCY_SOS',
         teams_assigned: incident.incidentTeams?.length || 0,
-        outbox_events_processed: processedOutboxEvents,
+        outbox_events_processed: outboxResult.processedCount,
       },
     });
 
@@ -154,7 +162,8 @@ export class SosProcessor extends WorkerHost {
       incidentId: incident.id,
       publicId: incident.publicId,
       teamsAssigned: incident.incidentTeams?.length || 0,
-      outboxEventsProcessed: processedOutboxEvents,
+      outboxEventsProcessed: outboxResult.processedCount,
+      outboxResults: outboxResult.results,
       processedAt: new Date().toISOString(),
     };
   }

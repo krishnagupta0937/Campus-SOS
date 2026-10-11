@@ -27,6 +27,14 @@ export interface DevDbData {
   [key: string]: any;
 }
 
+/**
+ * DevStore - Single-Process In-Memory / File-Backed Database Mock
+ * 
+ * SAFETY NOTICE & ARCHITECTURAL LIMITATION:
+ * DevStore is STRICTLY limited to single-process local development and isolated unit tests.
+ * It does NOT provide distributed, multi-process concurrency safety.
+ * Production environments, worker fleets, and multi-process test suites MUST use PostgreSQL.
+ */
 export class DevStore {
   private dataDir = path.resolve(__dirname, '../../data');
   private dbPath = path.resolve(__dirname, '../../data/campus_sos_dev_db.json');
@@ -103,14 +111,22 @@ export class DevStore {
   }
 
   public save() {
+    this.ensureDataDir();
+    const tmpPath = `${this.dbPath}.${process.pid}.${Date.now()}.${Math.random().toString(36).substring(2)}.tmp`;
     try {
-      this.ensureDataDir();
-      fs.writeFileSync(this.dbPath, JSON.stringify(this.data, null, 2), 'utf8');
+      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf8');
+      fs.renameSync(tmpPath, this.dbPath);
       if (fs.existsSync(this.dbPath)) {
         this.lastMtime = fs.statSync(this.dbPath).mtimeMs;
       }
-    } catch (e) {
-      console.error('Failed to save dev db:', e);
+    } catch (e: any) {
+      try {
+        if (fs.existsSync(tmpPath)) {
+          fs.unlinkSync(tmpPath);
+        }
+      } catch {}
+      console.error('CRITICAL: DevStore atomic write failure:', e);
+      throw new Error(`DevStore persistence failure: ${e?.message || e}`);
     }
   }
 
@@ -122,8 +138,9 @@ export class DevStore {
     try {
       this.data = JSON.parse(snapshot);
       this.save();
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to restore dev db snapshot:', e);
+      throw new Error(`DevStore snapshot restore failure: ${e?.message || e}`);
     }
   }
 
@@ -699,8 +716,12 @@ export class DevStore {
           if (!strVal.includes(String(val.contains).toLowerCase())) return false;
         } else if ('gte' in val) {
           if (itemVal < val.gte) return false;
+        } else if ('gt' in val) {
+          if (itemVal <= val.gt) return false;
         } else if ('lte' in val) {
           if (itemVal > val.lte) return false;
+        } else if ('lt' in val) {
+          if (itemVal >= val.lt) return false;
         } else {
           if (JSON.stringify(itemVal) !== JSON.stringify(val)) return false;
         }

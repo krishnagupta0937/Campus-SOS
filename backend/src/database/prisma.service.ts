@@ -65,9 +65,10 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleInit() {
+    const isProduction =
+      process.env.NODE_ENV === 'production' || process.env.APP_ENV === 'production';
     const requirePostgres =
-      process.env.REQUIRE_POSTGRES === 'true' ||
-      (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEVSTORE_IN_PROD !== 'true');
+      process.env.REQUIRE_POSTGRES === 'true' || isProduction;
 
     try {
       await this.$connect();
@@ -79,7 +80,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         console.error('❌ PostgreSQL connection failed and strict mode is active (REQUIRE_POSTGRES=true or NODE_ENV=production):', err);
         throw new Error('PostgreSQL connection failed. Strict persistence mode requires a live database connection.');
       }
-      console.warn('⚠️ PostgreSQL at localhost:5432 not reachable. Using resilient persistent DevStore engine (Development fallback only).');
+      console.warn('⚠️ PostgreSQL at localhost:5432 not reachable. Using DevStore engine (strictly limited to single-process development and unit tests).');
     }
   }
 
