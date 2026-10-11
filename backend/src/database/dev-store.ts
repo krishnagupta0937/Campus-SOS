@@ -15,8 +15,14 @@ export interface DevDbData {
   auditLogs: any[];
   breakGlassRequests: any[];
   notifications: any[];
+  notificationDeliveries: any[];
   hotlines: any[];
   settings: any[];
+  assignments: any[];
+  responderProfiles: any[];
+  incidentTeams: any[];
+  routingDecisions: any[];
+  aiClassifications: any[];
   [key: string]: any;
 }
 
@@ -35,8 +41,14 @@ export class DevStore {
     auditLogs: [],
     breakGlassRequests: [],
     notifications: [],
+    notificationDeliveries: [],
     hotlines: [],
     settings: [],
+    assignments: [],
+    responderProfiles: [],
+    incidentTeams: [],
+    routingDecisions: [],
+    aiClassifications: [],
   };
 
   constructor() {
@@ -88,22 +100,26 @@ export class DevStore {
   private seedDefaults() {
     // 1. Teams
     const canonicalTeams = [
-      { id: 'team_admin_01', code: 'CAMPUS_ADMIN', name: 'Campus Administration', dutyState: 'AVAILABLE' },
-      { id: 'team_proctor_01', code: 'CHIEF_PROCTOR', name: 'Chief Proctor Office', dutyState: 'AVAILABLE' },
-      { id: 'team_sec_01', code: 'SECURITY', name: 'Security & Patrol', dutyState: 'AVAILABLE' },
-      { id: 'team_med_01', code: 'MEDICAL', name: 'Medical Response Unit', dutyState: 'AVAILABLE' },
-      { id: 'team_fire_01', code: 'FIRE_SAFETY', name: 'Fire & Chemical Safety', dutyState: 'AVAILABLE' },
-      { id: 'team_women_01', code: 'WOMEN_SAFETY', name: 'Women Safety & ICC', dutyState: 'AVAILABLE' },
-      { id: 'team_men_01', code: 'MEN_SAFETY', name: 'Men Harassment & Welfare', dutyState: 'AVAILABLE' },
-      { id: 'team_council_01', code: 'STUDENT_COUNCIL', name: 'Student Council', dutyState: 'AVAILABLE' },
-      { id: 'team_infra_01', code: 'INFRASTRUCTURE', name: 'Infrastructure & Works', dutyState: 'AVAILABLE' },
-      { id: 'team_trans_01', code: 'TRANSPORTATION', name: 'Transportation & Traffic', dutyState: 'AVAILABLE' },
-      { id: 'team_it_01', code: 'IT_DIGITAL', name: 'IT & Digital Safety', dutyState: 'AVAILABLE' },
+      { id: 'team_admin_01', code: 'CAMPUS_ADMIN', name: 'Campus Administration', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_proctor_01', code: 'CHIEF_PROCTOR', name: 'Chief Proctor Office', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_sec_01', code: 'SECURITY', name: 'Security & Patrol', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_med_01', code: 'MEDICAL', name: 'Medical Response Unit', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_fire_01', code: 'FIRE_SAFETY', name: 'Fire & Chemical Safety', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_women_01', code: 'WOMEN_SAFETY', name: 'Women Safety & ICC', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: true },
+      { id: 'team_men_01', code: 'MEN_SAFETY', name: 'Men Harassment & Welfare', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: true },
+      { id: 'team_council_01', code: 'STUDENT_COUNCIL', name: 'Student Council', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_infra_01', code: 'INFRASTRUCTURE', name: 'Infrastructure & Works', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_trans_01', code: 'TRANSPORTATION', name: 'Transportation & Traffic', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
+      { id: 'team_it_01', code: 'IT_DIGITAL', name: 'IT & Digital Safety', dutyState: 'AVAILABLE', isEnabled: true, isRestricted: false },
     ];
 
     for (const t of canonicalTeams) {
-      if (!this.data.teams.some((existing) => existing.code === t.code)) {
+      const existing = this.data.teams.find((e) => e.code === t.code);
+      if (!existing) {
         this.data.teams.push(t);
+      } else {
+        if (existing.isEnabled === undefined) existing.isEnabled = true;
+        if (existing.isRestricted === undefined) existing.isRestricted = t.isRestricted;
       }
     }
 
@@ -261,14 +277,24 @@ export class DevStore {
       if (u.teamCode) {
         const team = this.data.teams.find((t) => t.code === u.teamCode);
         if (team && !this.data.teamMembers.some((tm) => tm.userId === u.id && tm.teamId === team.id)) {
+          const memberId = `tm_${u.id}_${team.id}`;
           this.data.teamMembers.push({
-            id: `tm_${u.id}_${team.id}`,
+            id: memberId,
             userId: u.id,
             teamId: team.id,
             role: 'LEAD',
             joinedAt: new Date().toISOString(),
             leftAt: null,
           });
+          if (!this.data.responderProfiles.some((rp) => rp.memberId === memberId)) {
+            this.data.responderProfiles.push({
+              memberId,
+              dutyState: 'AVAILABLE',
+              dutyStateChangedAt: new Date().toISOString(),
+              currentAssignmentCount: 0,
+              skills: [],
+            });
+          }
         }
       }
     }
@@ -330,6 +356,7 @@ export class DevStore {
       user: 'users',
       team: 'teams',
       teamMember: 'teamMembers',
+      responderProfile: 'responderProfiles',
       incident: 'incidents',
       incidentDraft: 'incidentDrafts',
       incidentLocation: 'incidentLocations',
@@ -338,6 +365,7 @@ export class DevStore {
       auditLog: 'auditLogs',
       breakGlassRequest: 'breakGlassRequests',
       notification: 'notifications',
+      notificationDelivery: 'notificationDeliveries',
       session: 'sessions',
       incidentStatusHistory: 'incidentStatusHistories',
       assignment: 'assignments',
@@ -345,6 +373,8 @@ export class DevStore {
       systemSetting: 'systemSettings',
       broadcastNotice: 'broadcastNotices',
       incidentTeam: 'incidentTeams',
+      routingDecision: 'routingDecisions',
+      aiClassification: 'aiClassifications',
     };
     return map[name] || (name.endsWith('s') ? name : `${name}s`);
   }
@@ -385,8 +415,48 @@ export class DevStore {
             };
           });
       }
+      if (include.routingDecisions) {
+        cloned.routingDecisions = (this.data.routingDecisions || []).filter((rd: any) => rd.incidentId === item.id);
+      }
+      if (include.statusHistory) {
+        cloned.statusHistory = (this.data.incidentStatusHistories || []).filter((sh: any) => sh.incidentId === item.id);
+      }
       if (include.reporter) {
         cloned.reporter = (this.data.users || []).find((u: any) => u.id === item.reporterId) || null;
+      }
+    }
+    if (collection === 'teamMembers') {
+      if (include.responderProfile) {
+        cloned.responderProfile = (this.data.responderProfiles || []).find((rp: any) => rp.memberId === item.id) || {
+          memberId: item.id,
+          dutyState: 'AVAILABLE',
+          currentAssignmentCount: 0,
+        };
+      }
+      if (include.user) {
+        cloned.user = (this.data.users || []).find((u: any) => u.id === item.userId) || null;
+      }
+      if (include.team) {
+        cloned.team = (this.data.teams || []).find((t: any) => t.id === item.teamId) || null;
+      }
+    }
+    if (collection === 'assignments') {
+      if (include.member) {
+        const mem = (this.data.teamMembers || []).find((tm: any) => tm.id === item.memberId);
+        cloned.member = mem
+          ? this.attachIncludes(mem, 'teamMembers', typeof include.member === 'object' ? include.member.include || include.member : {})
+          : null;
+      }
+      if (include.team) {
+        cloned.team = (this.data.teams || []).find((t: any) => t.id === item.teamId) || null;
+      }
+      if (include.incident) {
+        cloned.incident = (this.data.incidents || []).find((inc: any) => inc.id === item.incidentId) || null;
+      }
+    }
+    if (collection === 'notifications') {
+      if (include.deliveries) {
+        cloned.deliveries = (this.data.notificationDeliveries || []).filter((d: any) => d.notificationId === item.id);
       }
     }
     return cloned;
@@ -564,6 +634,13 @@ export class DevStore {
         }
       }
 
+      if (key === 'responderProfile') {
+        const rp = (this.data.responderProfiles || []).find((p: any) => p.memberId === item.id);
+        const duty = rp?.dutyState || 'AVAILABLE';
+        if (val.dutyState?.in && !val.dutyState.in.includes(duty)) return false;
+        continue;
+      }
+
       let itemVal = item[key];
       if (itemVal === undefined) {
         if (key === 'recipientUserId') itemVal = item['recipientId'];
@@ -573,6 +650,8 @@ export class DevStore {
       if (typeof val === 'object' && val !== null) {
         if ('in' in val && Array.isArray(val.in)) {
           if (!val.in.includes(itemVal)) return false;
+        } else if ('notIn' in val && Array.isArray(val.notIn)) {
+          if (val.notIn.includes(itemVal)) return false;
         } else if ('not' in val) {
           if (itemVal === val.not) return false;
         } else if ('contains' in val) {

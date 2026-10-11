@@ -1,21 +1,50 @@
 import {
   Injectable, NotFoundException, ConflictException,
   BadRequestException, ForbiddenException, HttpException, HttpStatus,
+  Optional, Inject, forwardRef,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../database/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { RoutingService, RoutingDecision } from '../routing/routing.service';
+import { AiService, AiClassification } from '../ai/ai.service';
+import { RuleClassifier } from '../ai/rule-classifier';
+import { DispatchService } from '../dispatch/dispatch.service';
 import { generatePublicId, isValidStatusTransition, STATUS_LABELS } from '../../common/utils/constants';
 
 @Injectable()
 export class IncidentsService {
+  private readonly routingService?: RoutingService;
+  private readonly aiService?: AiService;
+  private readonly dispatchService?: DispatchService;
+  private readonly sosQueue?: Queue;
+  private readonly standardQueue?: Queue;
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
-    @InjectQueue('sos-critical') private readonly sosQueue: Queue,
-    @InjectQueue('standard') private readonly standardQueue: Queue,
-  ) {}
+    @Optional() routingService?: RoutingService,
+    @Optional() aiService?: AiService,
+    @Optional() dispatchService?: DispatchService,
+    @Optional() @InjectQueue('sos-critical') sosQueue?: Queue,
+    @Optional() @InjectQueue('standard') standardQueue?: Queue,
+  ) {
+    // If called with legacy signature: (prisma, audit, sosQueue, standardQueue)
+    if (routingService && typeof (routingService as any).add === 'function') {
+      this.sosQueue = routingService as any;
+      this.standardQueue = aiService as any;
+      this.routingService = undefined;
+      this.aiService = undefined;
+      this.dispatchService = undefined;
+    } else {
+      this.routingService = routingService;
+      this.aiService = aiService;
+      this.dispatchService = dispatchService;
+      this.sosQueue = sosQueue;
+      this.standardQueue = standardQueue;
+    }
+  }
 
   /**
    * Create an SOS draft for staging before explicit confirmation.
@@ -117,7 +146,47 @@ export class IncidentsService {
     const count = await this.prisma.incident.count({ where: { workflow: 'EMERGENCY_SOS' } });
     const publicId = generatePublicId('EMERGENCY_SOS', count + 1);
 
-    // Atomic transaction: incident + location + outbox + audit + draft deletion
+    // 1. Classification via AiService or fallback RuleClassifier
+    let classification: AiClassification;
+    if (this.aiService && typeof this.aiService.classify === 'function') {
+      classification = await this.aiService.classify({
+        workflow: 'EMERGENCY_SOS',
+        description: payload.description || '',
+        student_category: null,
+        location: payload.location ? { kind: payload.location.kind || null, name: payload.location.text || null } : null,
+        photo_present: Boolean(payload.attachment_ids && payload.attachment_ids.length > 0),
+        photo_count: payload.attachment_ids?.length || 0,
+        time_of_day: 'DAY',
+        language_hint: 'auto',
+      });
+    } else {
+      const classifier = new RuleClassifier();
+      classification = classifier.classify({
+        workflow: 'EMERGENCY_SOS',
+        description: payload.description || '',
+        student_category: null,
+        location: payload.location ? { kind: payload.location.kind || null, name: payload.location.text || null } : null,
+        photo_present: Boolean(payload.attachment_ids && payload.attachment_ids.length > 0),
+        photo_count: payload.attachment_ids?.length || 0,
+        time_of_day: 'DAY',
+        language_hint: 'auto',
+      });
+    }
+
+    // 2. Deterministic Routing Engine
+    const routingEngine = (this.routingService && typeof this.routingService.route === 'function')
+      ? this.routingService
+      : new RoutingService(this.prisma);
+    const routingDecision: RoutingDecision = await routingEngine.route(classification, {
+      workflow: 'EMERGENCY_SOS',
+      student_category: null,
+    });
+
+    const isRestricted = routingDecision.restricted;
+    const campusWideEligible = routingDecision.campus_wide_eligible;
+    const finalCategory = classification.category || 'OTHER';
+
+    // Atomic transaction: incident + location + classification + routing + teams + notifications + outbox + audit + draft deletion
     let result: any;
     try {
       result = await this.prisma.$transaction(async (tx: any) => {
@@ -129,8 +198,13 @@ export class IncidentsService {
             createdById: reporterId,
             description: payload.description,
             studentCategory: null, // SOS never has student category
+            finalCategory,
             status: 'CREATED',
             confirmedAt: new Date(),
+            firstTeamNotifiedAt: new Date(),
+            isRestricted,
+            immediateDanger: classification.immediate_danger ?? true,
+            campusWideEligible,
             idempotencyKey,
           },
         });
@@ -171,6 +245,96 @@ export class IncidentsService {
           }
         }
 
+        // Persist AI classification
+        const aiRecord = tx.aiClassification?.create
+          ? await tx.aiClassification.create({
+              data: {
+                incidentId: incident.id,
+                source: classification.source === 'AI' ? 'AI' : 'RULE_FALLBACK',
+                category: classification.category,
+                confidence: classification.confidence,
+                immediateDanger: classification.immediate_danger,
+                reasoning: classification.reasoning,
+                inputSnapshot: { description: payload.description },
+                output: classification as any,
+                latencyMs: 10,
+              },
+            }).catch(() => null)
+          : null;
+
+        // Persist authoritative deterministic routing decision
+        if (tx.routingDecision?.create) {
+          await tx.routingDecision.create({
+            data: {
+              incidentId: incident.id,
+              classificationId: aiRecord?.id || incident.id,
+              configVersion: routingDecision.config_version,
+              matchedRules: routingDecision.matched_rules,
+              teams: routingDecision.teams as any,
+              restrictions: { restricted: routingDecision.restricted } as any,
+              audience: { campus_wide_eligible: routingDecision.campus_wide_eligible } as any,
+              flags: routingDecision.flags,
+            },
+          }).catch(() => null);
+        }
+
+        // Link assigned teams and generate notifications targeting active members
+        const routedTeamCodes = routingDecision.teams.map((t) => t.team_code);
+        if (tx.team?.findFirst) {
+          for (const tDef of routingDecision.teams) {
+            const team = await tx.team.findFirst({ where: { code: tDef.team_code } });
+            if (team && tx.incidentTeam?.create) {
+              await tx.incidentTeam.create({
+                data: {
+                  incidentId: incident.id,
+                  teamId: team.id,
+                  role: tDef.role,
+                  grantedBy: 'ROUTING',
+                },
+              }).catch(() => null);
+
+              // Deliver in-app notification to active team members with status SENT (never premature DELIVERED)
+              const members = tx.teamMember?.findMany
+                ? await tx.teamMember.findMany({ where: { teamId: team.id, leftAt: null } })
+                : [];
+              for (const m of members) {
+                if (tx.notification?.create) {
+                  const notif = await tx.notification.create({
+                    data: {
+                      recipientUserId: m.userId,
+                      recipientId: m.userId,
+                      incidentId: incident.id,
+                      audienceType: 'RESPONDER',
+                      channel: 'IN_APP',
+                      deliveryStatus: 'SENT',
+                      title: `Emergency SOS Alert: ${publicId}`,
+                      body: `${(payload.description || 'Emergency SOS confirmed').substring(0, 100)}`,
+                      payload: {
+                        incident_id: incident.id,
+                        public_id: publicId,
+                        workflow: 'EMERGENCY_SOS',
+                        team_code: tDef.team_code,
+                        role: tDef.role,
+                      },
+                    },
+                  }).catch(() => null);
+
+                  if (notif?.id && tx.notificationDelivery?.create) {
+                    await tx.notificationDelivery.create({
+                      data: {
+                        notificationId: notif.id,
+                        channel: 'IN_APP',
+                        status: 'SENT',
+                        sentAt: new Date(),
+                      },
+                    }).catch(() => null);
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // Outbox event: guaranteed delivery to worker
         await tx.outboxEvent.create({
           data: {
@@ -181,17 +345,31 @@ export class IncidentsService {
               workflow: 'EMERGENCY_SOS',
               public_id: publicId,
               reporter_id: reporterId,
+              routed_teams: routedTeamCodes,
+              routing_decision: routingDecision,
             },
           },
         });
 
-        // Audit: SOS_CONFIRMED
+        // Audit: SOS_CONFIRMED & ROUTING_DECISION
         await this.auditService.logWithTransaction(tx, {
           eventType: 'SOS_CONFIRMED',
           incidentId: incident.id,
           actorUserId: reporterId,
           actorKind: 'USER',
           details: { public_id: publicId, workflow: 'EMERGENCY_SOS' },
+        });
+
+        await this.auditService.logWithTransaction(tx, {
+          eventType: 'ROUTING_DECISION',
+          incidentId: incident.id,
+          actorKind: 'SYSTEM',
+          details: {
+            public_id: publicId,
+            matched_rules: routingDecision.matched_rules,
+            routed_teams: routedTeamCodes,
+            restricted: isRestricted,
+          },
         });
 
         // Delete draft atomically inside transaction to prevent duplicate confirmations
@@ -225,16 +403,31 @@ export class IncidentsService {
       throw err;
     }
 
+    // Initiate dispatch offers to responders for ACT teams
+    if (this.dispatchService) {
+      try {
+        await this.dispatchService.initiateDispatch(
+          result.id,
+          routingDecision.teams,
+          'EMERGENCY_SOS',
+        );
+      } catch (dispatchErr: any) {
+        console.warn('Dispatch initiation warning (proceeding resiliently):', dispatchErr?.message);
+      }
+    }
+
     // Enqueue for background processing (non-blocking)
     try {
-      await this.sosQueue.add('process-sos', {
-        incident_id: result.id,
-        workflow: 'EMERGENCY_SOS',
-      }, {
-        priority: 1,
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 1000 },
-      });
+      if (this.sosQueue) {
+        await this.sosQueue.add('process-sos', {
+          incident_id: result.id,
+          workflow: 'EMERGENCY_SOS',
+        }, {
+          priority: 1,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 1000 },
+        });
+      }
     } catch {
       // Queue failure doesn't block confirmation — watchdog will pick it up
     }
@@ -308,21 +501,47 @@ export class IncidentsService {
     const count = await this.prisma.incident.count({ where: { workflow: 'STANDARD_REPORT' } });
     const publicId = generatePublicId('STANDARD_REPORT', count + 1);
 
-    // Map category to designated response team
-    const categoryToTeamCode: Record<string, string> = {
-      INFRASTRUCTURE: 'INFRASTRUCTURE',
-      STUDENT_MISCONDUCT: 'CHIEF_PROCTOR',
-      FACULTY_STAFF_MISCONDUCT: 'CHIEF_PROCTOR',
-      WOMEN_HARASSMENT: 'WOMEN_SAFETY',
-      MEN_HARASSMENT: 'MEN_SAFETY',
-      DIGITAL_CYBER: 'IT_DIGITAL',
-      TRAFFIC_PARKING: 'TRANSPORTATION',
-      GENERAL_COMPLAINT: 'CAMPUS_ADMIN',
-      FIRE_HAZARD: 'FIRE_SAFETY',
-    };
+    // 1. Classification via AiService or fallback RuleClassifier
+    let classification: AiClassification;
+    if (this.aiService && typeof this.aiService.classify === 'function') {
+      classification = await this.aiService.classify({
+        workflow: 'STANDARD_REPORT',
+        description: data.description,
+        student_category: data.category,
+        location: data.location ? { kind: data.location.kind || null, name: data.location.text || null } : null,
+        photo_present: Boolean(data.attachment_ids && data.attachment_ids.length > 0),
+        photo_count: data.attachment_ids?.length || 0,
+        time_of_day: 'DAY',
+        language_hint: 'auto',
+      });
+    } else {
+      const classifier = new RuleClassifier();
+      classification = classifier.classify({
+        workflow: 'STANDARD_REPORT',
+        description: data.description,
+        student_category: data.category,
+        location: data.location ? { kind: data.location.kind || null, name: data.location.text || null } : null,
+        photo_present: Boolean(data.attachment_ids && data.attachment_ids.length > 0),
+        photo_count: data.attachment_ids?.length || 0,
+        time_of_day: 'DAY',
+        language_hint: 'auto',
+      });
+    }
 
-    const primaryTeamCode = categoryToTeamCode[data.category] || 'CAMPUS_ADMIN';
-    const isRestricted = ['WOMEN_HARASSMENT', 'MEN_HARASSMENT', 'FACULTY_STAFF_MISCONDUCT'].includes(data.category);
+    // 2. Deterministic Routing Engine (authoritative category union evaluation)
+    const routingEngine = (this.routingService && typeof this.routingService.route === 'function')
+      ? this.routingService
+      : new RoutingService(this.prisma);
+    const routingDecision: RoutingDecision = await routingEngine.route(classification, {
+      workflow: 'STANDARD_REPORT',
+      student_category: data.category,
+    });
+
+    const isRestricted = routingDecision.restricted;
+    const campusWideEligible = routingDecision.campus_wide_eligible;
+    const finalCategory = (classification.category && classification.category !== 'OTHER')
+      ? classification.category
+      : data.category;
 
     let result: any;
     try {
@@ -335,9 +554,11 @@ export class IncidentsService {
             createdById: reporterId,
             description: data.description,
             studentCategory: data.category,
-            finalCategory: data.category,
+            finalCategory,
             status: 'TEAMS_NOTIFIED',
             isRestricted,
+            immediateDanger: classification.immediate_danger || false,
+            campusWideEligible,
             firstTeamNotifiedAt: new Date(),
             idempotencyKey,
           },
@@ -371,36 +592,92 @@ export class IncidentsService {
           }
         }
 
-        // Link assigned teams and generate notifications
-        const teamCodes = Array.from(new Set([primaryTeamCode, 'CAMPUS_ADMIN']));
-        for (const tCode of teamCodes) {
-          const team = await tx.team.findFirst({ where: { code: tCode } });
-          if (team) {
-            await tx.incidentTeam.create({
+        // Persist AI classification
+        const aiRecord = tx.aiClassification?.create
+          ? await tx.aiClassification.create({
               data: {
                 incidentId: incident.id,
-                teamId: team.id,
-                role: tCode === primaryTeamCode ? 'ACT' : 'KNOW',
+                source: classification.source === 'AI' ? 'AI' : 'RULE_FALLBACK',
+                category: classification.category,
+                confidence: classification.confidence,
+                immediateDanger: classification.immediate_danger,
+                reasoning: classification.reasoning,
+                inputSnapshot: { description: data.description, category: data.category },
+                output: classification as any,
+                latencyMs: 10,
               },
-            }).catch(() => null);
+            }).catch(() => null)
+          : null;
 
-            // Deliver in-app notification to team members
-            const members = await tx.teamMember.findMany({
-              where: { teamId: team.id, leftAt: null },
-            });
-            for (const m of members) {
-              await tx.notification.create({
+        // Persist authoritative deterministic routing decision
+        if (tx.routingDecision?.create) {
+          await tx.routingDecision.create({
+            data: {
+              incidentId: incident.id,
+              classificationId: aiRecord?.id || incident.id,
+              configVersion: routingDecision.config_version,
+              matchedRules: routingDecision.matched_rules,
+              teams: routingDecision.teams as any,
+              restrictions: { restricted: routingDecision.restricted } as any,
+              audience: { campus_wide_eligible: routingDecision.campus_wide_eligible } as any,
+              flags: routingDecision.flags,
+            },
+          }).catch(() => null);
+        }
+
+        // Link assigned teams and generate notifications targeting active members
+        const routedTeamCodes = routingDecision.teams.map((t) => t.team_code);
+        if (tx.team?.findFirst) {
+          for (const tDef of routingDecision.teams) {
+            const team = await tx.team.findFirst({ where: { code: tDef.team_code } });
+            if (team && tx.incidentTeam?.create) {
+              await tx.incidentTeam.create({
                 data: {
-                  recipientUserId: m.userId,
-                  recipientId: m.userId,
                   incidentId: incident.id,
-                  audienceType: 'RESPONDER',
-                  channel: 'IN_APP',
-                  deliveryStatus: 'DELIVERED',
-                  title: `New Incident Assigned: ${publicId}`,
-                  body: `${data.description.substring(0, 100)}`,
+                  teamId: team.id,
+                  role: tDef.role,
+                  grantedBy: 'ROUTING',
                 },
               }).catch(() => null);
+
+              // Deliver in-app notification to active team members with status SENT (never premature DELIVERED)
+              const members = tx.teamMember?.findMany
+                ? await tx.teamMember.findMany({ where: { teamId: team.id, leftAt: null } })
+                : [];
+              for (const m of members) {
+                if (tx.notification?.create) {
+                  const notif = await tx.notification.create({
+                    data: {
+                      recipientUserId: m.userId,
+                      recipientId: m.userId,
+                      incidentId: incident.id,
+                      audienceType: 'RESPONDER',
+                      channel: 'IN_APP',
+                      deliveryStatus: 'SENT',
+                      title: `New Incident Assigned: ${publicId}`,
+                      body: `${data.description.substring(0, 100)}`,
+                      payload: {
+                        incident_id: incident.id,
+                        public_id: publicId,
+                        workflow: 'STANDARD_REPORT',
+                        team_code: tDef.team_code,
+                        role: tDef.role,
+                      },
+                    },
+                  }).catch(() => null);
+
+                  if (notif?.id && tx.notificationDelivery?.create) {
+                    await tx.notificationDelivery.create({
+                      data: {
+                        notificationId: notif.id,
+                        channel: 'IN_APP',
+                        status: 'SENT',
+                        sentAt: new Date(),
+                      },
+                    }).catch(() => null);
+                  }
+                }
+              }
             }
           }
         }
@@ -416,18 +693,32 @@ export class IncidentsService {
               public_id: publicId,
               reporter_id: reporterId,
               student_category: data.category,
-              routed_teams: teamCodes,
+              final_category: finalCategory,
+              routed_teams: routedTeamCodes,
+              routing_decision: routingDecision,
             },
           },
         });
 
-        // Audit
+        // Audit: INCIDENT_CREATED & ROUTING_DECISION
         await this.auditService.logWithTransaction(tx, {
           eventType: 'INCIDENT_CREATED',
           incidentId: incident.id,
           actorUserId: reporterId,
           actorKind: 'USER',
-          details: { public_id: publicId, workflow: 'STANDARD_REPORT', category: data.category },
+          details: { public_id: publicId, workflow: 'STANDARD_REPORT', category: data.category, final_category: finalCategory },
+        });
+
+        await this.auditService.logWithTransaction(tx, {
+          eventType: 'ROUTING_DECISION',
+          incidentId: incident.id,
+          actorKind: 'SYSTEM',
+          details: {
+            public_id: publicId,
+            matched_rules: routingDecision.matched_rules,
+            routed_teams: routedTeamCodes,
+            restricted: isRestricted,
+          },
         });
 
         return incident;
@@ -458,13 +749,15 @@ export class IncidentsService {
 
     // Enqueue
     try {
-      await this.standardQueue.add('process-standard', {
-        incident_id: result.id,
-        workflow: 'STANDARD_REPORT',
-      }, {
-        attempts: 3,
-        backoff: { type: 'exponential', delay: 2000 },
-      });
+      if (this.standardQueue) {
+        await this.standardQueue.add('process-standard', {
+          incident_id: result.id,
+          workflow: 'STANDARD_REPORT',
+        }, {
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 2000 },
+        });
+      }
     } catch {
       // Watchdog handles retry
     }

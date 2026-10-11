@@ -20,8 +20,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     auditLog: this.devStore.createModelHandler('auditLogs'),
     breakGlassRequest: this.devStore.createModelHandler('breakGlassRequests'),
     notification: this.devStore.createModelHandler('notifications'),
+    notificationDelivery: this.devStore.createModelHandler('notificationDeliveries'),
     hotline: this.devStore.createModelHandler('hotlines'),
     setting: this.devStore.createModelHandler('settings'),
+    assignment: this.devStore.createModelHandler('assignments'),
+    responderProfile: this.devStore.createModelHandler('responderProfiles'),
+    incidentTeam: this.devStore.createModelHandler('incidentTeams'),
+    routingDecision: this.devStore.createModelHandler('routingDecisions'),
+    aiClassification: this.devStore.createModelHandler('aiClassifications'),
   };
 
   constructor() {

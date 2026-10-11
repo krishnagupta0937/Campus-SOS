@@ -55,12 +55,15 @@ export class RoutingService {
         { team: 'SECURITY', role: 'ACT' as const, reason: 'Security support' },
         { team: 'CAMPUS_ADMIN', role: 'KNOW' as const, reason: 'Admin awareness' },
       ],
+      conditional_teams: [
+        { team: 'MEDICAL', role: 'ACT', when: ['injury_present'] },
+      ],
       campus_wide_if: 'is_major',
       restricted: false,
     },
     {
       rule_id: 'R-MED-001',
-      categories: ['MEDICAL_EMERGENCY', 'ACCIDENT'],
+      categories: ['MEDICAL_EMERGENCY', 'ACCIDENT', 'MEDICAL'],
       teams: [
         { team: 'MEDICAL', role: 'ACT' as const, reason: 'Medical response' },
         { team: 'CAMPUS_ADMIN', role: 'KNOW' as const, reason: 'Admin awareness' },
@@ -85,7 +88,7 @@ export class RoutingService {
     },
     {
       rule_id: 'R-TM-001',
-      categories: ['TEACHER_MISCONDUCT'],
+      categories: ['TEACHER_MISCONDUCT', 'FACULTY_STAFF_MISCONDUCT'],
       teams: [
         { team: 'CHIEF_PROCTOR', role: 'ACT' as const, reason: 'Misconduct investigation' },
         { team: 'CAMPUS_ADMIN', role: 'KNOW' as const, reason: 'Admin awareness' },
@@ -121,7 +124,7 @@ export class RoutingService {
     },
     {
       rule_id: 'R-HW-001',
-      categories: ['HARASSMENT_WOMEN'],
+      categories: ['HARASSMENT_WOMEN', 'WOMEN_HARASSMENT'],
       teams: [
         { team: 'WOMEN_SAFETY', role: 'ACT' as const, reason: 'Women safety response' },
         { team: 'CHIEF_PROCTOR', role: 'ACT' as const, reason: 'Disciplinary' },
@@ -134,7 +137,7 @@ export class RoutingService {
     },
     {
       rule_id: 'R-HM-001',
-      categories: ['HARASSMENT_MEN'],
+      categories: ['HARASSMENT_MEN', 'MEN_HARASSMENT'],
       teams: [
         { team: 'MEN_SAFETY', role: 'ACT' as const, reason: 'Men safety response' },
         { team: 'CHIEF_PROCTOR', role: 'ACT' as const, reason: 'Disciplinary' },
@@ -181,7 +184,7 @@ export class RoutingService {
     },
     {
       rule_id: 'R-IH-001',
-      categories: ['INFRASTRUCTURE_HAZARD'],
+      categories: ['INFRASTRUCTURE_HAZARD', 'INFRASTRUCTURE'],
       teams: [
         { team: 'INFRASTRUCTURE', role: 'ACT' as const, reason: 'Facilities response' },
         { team: 'CAMPUS_ADMIN', role: 'KNOW' as const, reason: 'Admin awareness' },
@@ -193,7 +196,7 @@ export class RoutingService {
     },
     {
       rule_id: 'R-CY-001',
-      categories: ['CYBER_DIGITAL'],
+      categories: ['CYBER_DIGITAL', 'DIGITAL_CYBER'],
       teams: [
         { team: 'IT_DIGITAL', role: 'ACT' as const, reason: 'IT/Digital response' },
         { team: 'CAMPUS_ADMIN', role: 'KNOW' as const, reason: 'Admin awareness' },
@@ -205,7 +208,7 @@ export class RoutingService {
     },
     {
       rule_id: 'R-GR-001',
-      categories: ['GRIEVANCE_WELFARE'],
+      categories: ['GRIEVANCE_WELFARE', 'GENERAL_COMPLAINT'],
       teams: [
         { team: 'CAMPUS_ADMIN', role: 'KNOW' as const, reason: 'Admin awareness' },
       ],
@@ -217,7 +220,7 @@ export class RoutingService {
     },
     {
       rule_id: 'R-VEH-001',
-      categories: ['VEHICLE_INCIDENT', 'PARKING_ISSUE'],
+      categories: ['VEHICLE_INCIDENT', 'PARKING_ISSUE', 'TRAFFIC_PARKING'],
       teams: [
         { team: 'TRANSPORTATION', role: 'ACT' as const, reason: 'Traffic/vehicle response' },
         { team: 'CAMPUS_ADMIN', role: 'KNOW' as const, reason: 'Admin awareness' },
@@ -280,10 +283,33 @@ export class RoutingService {
   ): Promise<RoutingDecision> {
     // Collect candidate categories (union)
     const candidates = new Set<string>();
-    candidates.add(classification.category);
-    classification.secondary_categories.forEach(c => candidates.add(c));
+    const addWithAliases = (cat: string | null | undefined) => {
+      if (!cat) return;
+      candidates.add(cat);
+      if (cat === 'FIRE_HAZARD') candidates.add('FIRE');
+      if (cat === 'FIRE') candidates.add('FIRE_HAZARD');
+      if (cat === 'INFRASTRUCTURE') candidates.add('INFRASTRUCTURE_HAZARD');
+      if (cat === 'INFRASTRUCTURE_HAZARD') candidates.add('INFRASTRUCTURE');
+      if (cat === 'WOMEN_HARASSMENT') candidates.add('HARASSMENT_WOMEN');
+      if (cat === 'HARASSMENT_WOMEN') candidates.add('WOMEN_HARASSMENT');
+      if (cat === 'MEN_HARASSMENT') candidates.add('HARASSMENT_MEN');
+      if (cat === 'HARASSMENT_MEN') candidates.add('MEN_HARASSMENT');
+      if (cat === 'FACULTY_STAFF_MISCONDUCT') candidates.add('TEACHER_MISCONDUCT');
+      if (cat === 'TEACHER_MISCONDUCT') candidates.add('FACULTY_STAFF_MISCONDUCT');
+      if (cat === 'DIGITAL_CYBER') candidates.add('CYBER_DIGITAL');
+      if (cat === 'CYBER_DIGITAL') candidates.add('DIGITAL_CYBER');
+      if (cat === 'TRAFFIC_PARKING') {
+        candidates.add('PARKING_ISSUE');
+        candidates.add('VEHICLE_INCIDENT');
+      }
+      if (cat === 'GENERAL_COMPLAINT') candidates.add('GRIEVANCE_WELFARE');
+      if (cat === 'GRIEVANCE_WELFARE') candidates.add('GENERAL_COMPLAINT');
+    };
+
+    addWithAliases(classification.category);
+    classification.secondary_categories?.forEach(c => addWithAliases(c));
     if (context.student_category) {
-      candidates.add(context.student_category);
+      addWithAliases(context.student_category);
     }
 
     // Special: self-harm indicator
@@ -292,11 +318,20 @@ export class RoutingService {
     }
 
     // Load enabled teams
-    const enabledTeams = await this.prisma.team.findMany({
-      where: { isEnabled: true },
-      select: { code: true, isRestricted: true },
-    });
-    const enabledTeamCodes = new Set(enabledTeams.map(t => t.code));
+    let enabledTeamCodes: Set<string>;
+    if (this.prisma?.team?.findMany) {
+      const allTeams = await this.prisma.team.findMany({
+        select: { code: true, isRestricted: true, isEnabled: true },
+      });
+      const enabled = allTeams.filter((t: any) => t.isEnabled !== false);
+      enabledTeamCodes = new Set(enabled.map((t: any) => t.code));
+    } else {
+      enabledTeamCodes = new Set([
+        'CAMPUS_ADMIN', 'CHIEF_PROCTOR', 'SECURITY', 'MEDICAL', 'FIRE_SAFETY',
+        'WOMEN_SAFETY', 'MEN_SAFETY', 'STUDENT_COUNCIL', 'INFRASTRUCTURE',
+        'TRANSPORTATION', 'IT_DIGITAL',
+      ]);
+    }
 
     // Evaluate all rules (union)
     const teamsMap = new Map<string, { role: 'ACT' | 'KNOW'; reason: string; responders_required: number }>();

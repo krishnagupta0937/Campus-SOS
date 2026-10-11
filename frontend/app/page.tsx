@@ -18,8 +18,6 @@ import {
   LogIn,
   AlertTriangle,
   RefreshCw,
-  Info,
-  ShieldCheck,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -50,7 +48,6 @@ export default function Page() {
   const [incidents, setIncidents] = React.useState<IncidentRecord[]>([]);
   const [isLoadingIncidents, setIsLoadingIncidents] = React.useState<boolean>(false);
   const [fetchError, setFetchError] = React.useState<string | null>(null);
-  const [isDemoMode, setIsDemoMode] = React.useState<boolean>(false);
 
   // Modals & Live SOS Tracker
   const [sosModalOpen, setSosModalOpen] = React.useState<boolean>(false);
@@ -220,47 +217,6 @@ export default function Page() {
     setViewMode("WORKSPACE");
   };
 
-  // Demo records generator (Explicitly isolated & visually labelled)
-  const toggleDemoMode = () => {
-    if (!isDemoMode) {
-      setIsDemoMode(true);
-      setIncidents([
-        {
-          id: "DEMO-SOS-01",
-          public_id: "DEMO-SOS-01",
-          workflow: "EMERGENCY_SOS",
-          category: "FIRE_HAZARD",
-          category_label: "Fire Hazard (Illustrative)",
-          description: "ILLUSTRATIVE DEMO: Simulated lab emergency drill record.",
-          location: "Academic Block B (Demo)",
-          pin: { x: 0.42, y: 0.58 },
-          photos: [],
-          created_at: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-          status: "TEAMS_NOTIFIED",
-          assigned_teams: ["Fire & Safety", "Security Patrol"],
-          isDemo: true,
-        },
-        {
-          id: "DEMO-REP-02",
-          public_id: "DEMO-REP-02",
-          workflow: "STANDARD_REPORT",
-          category: "INFRASTRUCTURE",
-          category_label: "Infrastructure (Illustrative)",
-          description: "ILLUSTRATIVE DEMO: Simulated facilities repair sample.",
-          location: "Academic Block A (Demo)",
-          pin: { x: 0.24, y: 0.54 },
-          photos: [],
-          created_at: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-          status: "UNDER_REVIEW",
-          assigned_teams: ["Infrastructure & Facilities"],
-          isDemo: true,
-        },
-      ]);
-    } else {
-      setIsDemoMode(false);
-      loadIncidents();
-    }
-  };
 
   return (
     <div className="min-h-screen bg-[#F5F1E8] text-[#272B27] flex flex-col font-sans">
@@ -310,20 +266,7 @@ export default function Page() {
           </Badge>
         </div>
 
-        {/* Demo Mode Toggle & Status */}
         <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={toggleDemoMode}
-            className={`px-2 py-0.5 border font-mono text-[11px] font-bold uppercase transition-all cursor-pointer ${
-              isDemoMode
-                ? "bg-amber-500 text-white border-amber-700"
-                : "bg-white text-[#272B27] border-[#272B27] hover:bg-[#EEE8DC]"
-            }`}
-          >
-            {isDemoMode ? "Disable Demo Mode" : "Load Demo Data"}
-          </button>
-
           {activeAccount ? (
             <div className="hidden md:flex items-center gap-2 px-2.5 py-1 bg-white border border-[#272B27]/40 text-[#272B27]">
               <span className="w-2 h-2 rounded-full bg-emerald-600" />
@@ -353,27 +296,8 @@ export default function Page() {
         </div>
       </div>
 
-      {/* Demo Mode Prominent Banner */}
-      {isDemoMode && (
-        <div className="w-full bg-amber-50 border-b border-amber-300 px-4 py-2 text-xs font-mono text-amber-900 flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Info className="w-4 h-4 text-amber-700 shrink-0" />
-            <span>
-              <strong>DEMO MODE ACTIVE:</strong> Showing illustrative records for interface testing. These records are explicitly isolated and are not live campus incidents.
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={toggleDemoMode}
-            className="underline font-bold hover:text-amber-950 shrink-0"
-          >
-            Switch to Live Records
-          </button>
-        </div>
-      )}
-
       {/* Network / API Error Notice with Retry */}
-      {fetchError && !isDemoMode && (
+      {fetchError && (
         <div className="w-full bg-red-50 border-b border-red-300 px-4 py-2 text-xs font-mono text-red-900 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />

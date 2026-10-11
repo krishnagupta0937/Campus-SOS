@@ -6,13 +6,16 @@ import { SosController } from './sos.controller';
 import { AccessPolicyModule } from '../access-policy/access-policy.module';
 import { AuditModule } from '../audit/audit.module';
 import { AiModule } from '../ai/ai.module';
+import { RoutingModule } from '../routing/routing.module';
 import { DispatchModule } from '../dispatch/dispatch.module';
+import { StandardProcessor, SosProcessor } from './incidents.processor';
 
 @Module({
   imports: [
     AccessPolicyModule,
     AuditModule,
     AiModule,
+    RoutingModule,
     DispatchModule,
     BullModule.registerQueue(
       { name: 'sos-critical' },
@@ -20,7 +23,7 @@ import { DispatchModule } from '../dispatch/dispatch.module';
     ),
   ],
   controllers: [IncidentsController, SosController],
-  providers: [IncidentsService],
+  providers: [IncidentsService, StandardProcessor, SosProcessor],
   exports: [IncidentsService],
 })
 export class IncidentsModule {}
