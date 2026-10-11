@@ -88,8 +88,9 @@ export class DevStore {
           }
           this.lastMtime = stats.mtimeMs;
         }
-      } catch (e) {
-        // ignore concurrent read/write errors
+      } catch (e: any) {
+        console.error(`DevStore reload error: Failed to reload from ${this.dbPath}:`, e);
+        throw new Error(`DevStore reload error: Failed to read/parse database file at ${this.dbPath}: ${e?.message || e}`);
       }
     }
   }
@@ -104,8 +105,9 @@ export class DevStore {
           this.data.auditEvents = this.data.auditLogs || [];
         }
         this.lastMtime = fs.statSync(this.dbPath).mtimeMs;
-      } catch (e) {
-        console.warn('Failed to parse dev db JSON, re-initializing defaults.');
+      } catch (e: any) {
+        console.error(`DevStore load error: Corrupted JSON database at ${this.dbPath}:`, e);
+        throw new Error(`DevStore initialization error: Failed to read/parse database file at ${this.dbPath}: ${e?.message || e}`);
       }
     }
   }
@@ -581,22 +583,18 @@ export class DevStore {
         const idx = list.findIndex((item: any) => self.matchWhere(item, where));
         if (idx === -1) {
           // If record doesn't exist yet, create it gracefully
-          const created = {
+          const created = self.applyDataUpdates({
             id: where.id || uuidv4(),
             createdAt: new Date(),
             updatedAt: new Date(),
-            ...args.data,
-          };
+          }, args.data);
           list.push(created);
           (self.data as any)[collection] = list;
           self.save();
           return created;
         }
-        const updated = {
-          ...list[idx],
-          ...args.data,
-          updatedAt: new Date(),
-        };
+        const updated = self.applyDataUpdates(list[idx], args.data);
+        updated.updatedAt = new Date();
         list[idx] = updated;
         (self.data as any)[collection] = list;
         self.save();
@@ -609,11 +607,9 @@ export class DevStore {
         let count = 0;
         for (let i = 0; i < list.length; i++) {
           if (self.matchWhere(list[i], where)) {
-            list[i] = {
-              ...list[i],
-              ...args.data,
-              updatedAt: new Date(),
-            };
+            const updated = self.applyDataUpdates(list[i], args.data);
+            updated.updatedAt = new Date();
+            list[i] = updated;
             count++;
           }
         }
@@ -715,21 +711,59 @@ export class DevStore {
           const strVal = String(itemVal || '').toLowerCase();
           if (!strVal.includes(String(val.contains).toLowerCase())) return false;
         } else if ('gte' in val) {
-          if (itemVal < val.gte) return false;
+          const compA = this.toComparable(itemVal);
+          const compB = this.toComparable(val.gte);
+          if (compA === null || compA === undefined || compA < compB) return false;
         } else if ('gt' in val) {
-          if (itemVal <= val.gt) return false;
+          const compA = this.toComparable(itemVal);
+          const compB = this.toComparable(val.gt);
+          if (compA === null || compA === undefined || compA <= compB) return false;
         } else if ('lte' in val) {
-          if (itemVal > val.lte) return false;
+          const compA = this.toComparable(itemVal);
+          const compB = this.toComparable(val.lte);
+          if (compA === null || compA === undefined || compA > compB) return false;
         } else if ('lt' in val) {
-          if (itemVal >= val.lt) return false;
+          const compA = this.toComparable(itemVal);
+          const compB = this.toComparable(val.lt);
+          if (compA === null || compA === undefined || compA >= compB) return false;
         } else {
-          if (JSON.stringify(itemVal) !== JSON.stringify(val)) return false;
+          if (val === null) {
+            if (itemVal !== null && itemVal !== undefined) return false;
+          } else if (JSON.stringify(itemVal) !== JSON.stringify(val)) {
+            return false;
+          }
         }
       } else {
-        if (itemVal !== val) return false;
+        if (val === null) {
+          if (itemVal !== null && itemVal !== undefined) return false;
+        } else if (itemVal !== val) {
+          return false;
+        }
       }
     }
     return true;
+  }
+
+  private applyDataUpdates(original: any, data: any): any {
+    if (!data) return { ...original };
+    const result = { ...original };
+    for (const key of Object.keys(data)) {
+      const val = data[key];
+      if (val !== null && typeof val === 'object' && 'increment' in val && typeof val.increment === 'number') {
+        result[key] = (typeof original[key] === 'number' ? original[key] : 0) + val.increment;
+      } else if (val !== null && typeof val === 'object' && 'decrement' in val && typeof val.decrement === 'number') {
+        result[key] = (typeof original[key] === 'number' ? original[key] : 0) - val.decrement;
+      } else {
+        result[key] = val;
+      }
+    }
+    return result;
+  }
+
+  private toComparable(val: any): any {
+    if (val instanceof Date) return val.getTime();
+    if (typeof val === 'string' && !isNaN(Date.parse(val))) return new Date(val).getTime();
+    return val;
   }
 
   private applyOrderBy(list: any[], orderBy: any): any[] {
@@ -737,8 +771,10 @@ export class DevStore {
     const key = Object.keys(orderBy)[0];
     const dir = orderBy[key];
     copy.sort((a, b) => {
-      if (a[key] < b[key]) return dir === 'desc' ? 1 : -1;
-      if (a[key] > b[key]) return dir === 'desc' ? -1 : 1;
+      const valA = this.toComparable(a[key]);
+      const valB = this.toComparable(b[key]);
+      if (valA < valB) return dir === 'desc' ? 1 : -1;
+      if (valA > valB) return dir === 'desc' ? -1 : 1;
       return 0;
     });
     return copy;

@@ -30,8 +30,11 @@ export class DispatchService {
     const actTeams = teams.filter(t => t.role === 'ACT');
 
     for (const teamDef of actTeams) {
+      const teamCode = teamDef.team_code || (teamDef as any).code || (teamDef as any).teamCode;
+      if (!teamCode) continue;
+
       const team = await this.prisma.team.findUnique({
-        where: { code: teamDef.team_code },
+        where: { code: teamCode },
       });
 
       if (!team) continue;
@@ -45,7 +48,7 @@ export class DispatchService {
 
       if (candidates.length === 0) {
         // Escalate immediately
-        await this.escalate(incidentId, team.id, teamDef.team_code);
+        await this.escalate(incidentId, team.id, teamCode);
         continue;
       }
 

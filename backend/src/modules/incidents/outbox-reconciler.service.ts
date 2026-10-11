@@ -89,6 +89,22 @@ export class OutboxReconcilerService {
       this.logger.log(`Reconciling ${found} unprocessed outbox event(s)`);
 
       for (const event of pendingEvents) {
+        // Enforce bounded retry limit to prevent infinite loops
+        if ((event.attempts || 0) >= 5) {
+          this.logger.error(`Event ${event.id} has reached maximum retry attempts (5). Marking FAILED for manual intervention.`);
+          await this.prisma.outboxEvent.update({
+            where: { id: event.id },
+            data: {
+              status: 'FAILED',
+              lastError: 'Max reconciliation retries (5) exceeded; requires manual operator intervention',
+              lockedAt: null,
+              lockedBy: null,
+            },
+          });
+          failed++;
+          continue;
+        }
+
         const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : (event.payload || {});
         const workflow = payload.workflow || 'STANDARD_REPORT';
         const isSos = workflow === 'EMERGENCY_SOS';
@@ -101,14 +117,18 @@ export class OutboxReconcilerService {
 
         if (targetQueue) {
           try {
+            // Deduplicate: deterministic jobId prevents unbounded duplicate jobs
+            const deterministicJobId = `reconcile-${event.id}-${event.attempts || 0}`;
             await targetQueue.add(jobName, {
               incident_id: event.aggregateId,
               workflow,
               reconciled: true,
               outbox_event_id: event.id,
             }, {
+              jobId: deterministicJobId,
               attempts: 3,
               backoff: { type: 'exponential', delay: 1000 },
+              removeOnComplete: true,
             });
             enqueueSuccess = true;
             enqueued++;

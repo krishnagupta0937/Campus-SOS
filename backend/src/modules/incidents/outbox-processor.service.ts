@@ -28,6 +28,7 @@ export interface OutboxProcessResult {
 export class OutboxProcessorService {
   private readonly logger = new Logger(OutboxProcessorService.name);
   private readonly lockTtlMs = 120_000; // 2 minutes lock lease
+  private readonly maxRetries = 5;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -92,17 +93,25 @@ export class OutboxProcessorService {
 
   /**
    * Atomically lock and execute a single outbox event by its ID.
+   * 
+   * Atomicity guarantee:
+   * Only one worker can conditionally claim an eligible event in the database.
+   * If another worker holds an active lease, claim count is 0 and execution is skipped.
    */
   async processSingleEvent(
     eventId: string,
     workerId: string = `worker-${process.pid}`,
     workflowOverride?: string,
   ): Promise<OutboxProcessResult> {
-    const event = await this.prisma.outboxEvent.findUnique({
+    const now = new Date();
+    const staleThreshold = new Date(now.getTime() - this.lockTtlMs);
+
+    // Initial check: verify event exists and is not already processed or exhausted
+    const initial = await this.prisma.outboxEvent.findUnique({
       where: { id: eventId },
     });
 
-    if (!event) {
+    if (!initial) {
       return {
         eventId,
         eventType: 'UNKNOWN',
@@ -113,43 +122,82 @@ export class OutboxProcessorService {
     }
 
     // 1. Check if already processed (idempotent completion)
-    if (event.processed || event.status === 'PROCESSED') {
+    if (initial.processed || initial.status === 'PROCESSED') {
       return {
         eventId,
-        eventType: event.eventType,
+        eventType: initial.eventType,
         status: 'PROCESSED',
         success: true,
       };
     }
 
-    // 2. Concurrency Lock Check:
-    // If another worker has actively locked this event within the TTL window, skip it to prevent concurrent processing.
-    const now = new Date();
-    if (event.status === 'PROCESSING' && event.lockedAt) {
-      const lockAge = now.getTime() - new Date(event.lockedAt).getTime();
-      if (lockAge < this.lockTtlMs && event.lockedBy && event.lockedBy !== workerId) {
-        this.logger.warn(`Event ${eventId} locked by worker ${event.lockedBy} (${lockAge}ms ago), skipping concurrent execution`);
-        return {
-          eventId,
-          eventType: event.eventType,
-          status: 'LOCKED',
-          success: false,
-          error: `Event currently locked by worker ${event.lockedBy}`,
-        };
-      }
+    // Check bounded retry exhaustion
+    if ((initial.attempts || 0) >= this.maxRetries && initial.status === 'FAILED') {
+      return {
+        eventId,
+        eventType: initial.eventType,
+        status: 'FAILED',
+        success: false,
+        error: `Max retry limit (${this.maxRetries}) reached for event ${eventId}`,
+      };
     }
 
-    // 3. Acquire lock atomically
-    const currentAttempts = (event.attempts || 0) + 1;
-    await this.prisma.outboxEvent.update({
-      where: { id: eventId },
+    // 2. ATOMIC CONDITIONAL CLAIM:
+    // Uses conditional updateMany (or row-level locked transaction) so only one worker
+    // transitions an eligible row from PENDING/FAILED/expired-PROCESSING into PROCESSING.
+    const claim = await this.prisma.outboxEvent.updateMany({
+      where: {
+        id: eventId,
+        processed: false,
+        OR: [
+          { status: 'PENDING' },
+          { status: 'FAILED' },
+          {
+            AND: [
+              { status: 'PROCESSING' },
+              { lockedAt: { lt: staleThreshold } },
+            ],
+          },
+        ],
+      },
       data: {
         status: 'PROCESSING',
         lockedAt: now,
         lockedBy: workerId,
-        attempts: currentAttempts,
+        attempts: { increment: 1 },
       },
     });
+
+    if (claim.count === 0) {
+      // Re-read current database state to provide definitive reason
+      const current = await this.prisma.outboxEvent.findUnique({
+        where: { id: eventId },
+      });
+
+      if (current?.processed || current?.status === 'PROCESSED') {
+        return {
+          eventId,
+          eventType: current?.eventType || initial.eventType,
+          status: 'PROCESSED',
+          success: true,
+        };
+      }
+
+      this.logger.warn(`Event ${eventId} locked by worker ${current?.lockedBy || 'unknown'}, skipping concurrent execution`);
+      return {
+        eventId,
+        eventType: current?.eventType || initial.eventType,
+        status: 'LOCKED',
+        success: false,
+        error: `Event currently locked by worker ${current?.lockedBy || 'another worker'}`,
+      };
+    }
+
+    // 3. Atomically locked! Read fresh record with incremented attempts
+    const event = (await this.prisma.outboxEvent.findUnique({
+      where: { id: eventId },
+    })) || initial;
+    const currentAttempts = event.attempts || (initial.attempts || 0) + 1;
 
     // 4. Execute operation specific to eventType
     try {
@@ -229,6 +277,7 @@ export class OutboxProcessorService {
 
   /**
    * Execute the actual domain operation intended by the event.
+   * Explicitly throws on unknown event types to prevent false-positive completions.
    */
   private async executeEventOperation(event: any, workflowOverride?: string): Promise<void> {
     const payload = typeof event.payload === 'string' ? JSON.parse(event.payload) : (event.payload || {});
@@ -248,13 +297,9 @@ export class OutboxProcessorService {
         break;
       }
       default: {
-        // Unknown or custom event type
-        this.logger.warn(`Unregistered outbox event type: ${event.eventType}. Verifying incident persistence.`);
-        const incident = await this.prisma.incident.findUnique({ where: { id: incidentId } });
-        if (!incident) {
-          throw new Error(`Incident ${incidentId} not found for event type ${event.eventType}`);
-        }
-        break;
+        // Unknown event type: reject explicitly
+        this.logger.error(`Unsupported outbox event type encountered: '${event.eventType}' for aggregate ${incidentId}`);
+        throw new Error(`Unsupported outbox event type: '${event.eventType}'`);
       }
     }
   }

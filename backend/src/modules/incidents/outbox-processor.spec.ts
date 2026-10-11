@@ -15,7 +15,7 @@ describe('OutboxProcessorService & Outbox Reliability (P0 & P1)', () => {
         findUnique: vi.fn(),
         findMany: vi.fn(),
         update: vi.fn(),
-        updateMany: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       incident: {
         findUnique: vi.fn(),
@@ -86,14 +86,14 @@ describe('OutboxProcessorService & Outbox Reliability (P0 & P1)', () => {
       expect(result.success).toBe(true);
       expect(result.status).toBe('PROCESSED');
 
-      // Verify atomic lock was acquired
-      expect(mockPrisma.outboxEvent.update).toHaveBeenCalledWith(
+      // Verify atomic lock was acquired via conditional updateMany
+      expect(mockPrisma.outboxEvent.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'evt-100' },
+          where: expect.objectContaining({ id: 'evt-100' }),
           data: expect.objectContaining({
             status: 'PROCESSING',
             lockedBy: 'worker-unit-1',
-            attempts: 1,
+            attempts: { increment: 1 },
           }),
         }),
       );
@@ -205,6 +205,7 @@ describe('OutboxProcessorService & Outbox Reliability (P0 & P1)', () => {
       };
 
       mockPrisma.outboxEvent.findUnique.mockResolvedValue(mockLockedEvent);
+      mockPrisma.outboxEvent.updateMany.mockResolvedValue({ count: 0 });
 
       const result = await service.processSingleEvent('evt-locked-1', 'worker-concurrent-B');
 
@@ -215,6 +216,94 @@ describe('OutboxProcessorService & Outbox Reliability (P0 & P1)', () => {
       // Worker B does not modify event or trigger dispatch
       expect(mockPrisma.outboxEvent.update).not.toHaveBeenCalled();
       expect(mockDispatch.initiateDispatch).not.toHaveBeenCalled();
+    });
+
+    it('atomically prevents two simultaneous workers from acquiring the same eligible event', async () => {
+      const mockEvent = {
+        id: 'evt-race-1',
+        eventType: 'incident.created',
+        aggregateId: 'inc-race-1',
+        status: 'PENDING',
+        processed: false,
+        attempts: 0,
+        payload: { incident_id: 'inc-race-1' },
+      };
+
+      const mockIncident = {
+        id: 'inc-race-1',
+        publicId: 'REP-2026-RACE01',
+        workflow: 'STANDARD_REPORT',
+        incidentTeams: [],
+      };
+
+      mockPrisma.incident.findUnique.mockResolvedValue(mockIncident);
+      mockPrisma.outboxEvent.findUnique.mockResolvedValue(mockEvent);
+
+      // Simulate atomic conditional DB updateMany:
+      // First caller gets { count: 1 } (lock acquired), second caller gets { count: 0 } (lock denied)
+      mockPrisma.outboxEvent.updateMany
+        .mockResolvedValueOnce({ count: 1 })
+        .mockResolvedValueOnce({ count: 0 });
+
+      mockPrisma.outboxEvent.update.mockResolvedValue(mockEvent);
+
+      // Both workers attempt acquisition simultaneously
+      const [worker1Result, worker2Result] = await Promise.all([
+        service.processSingleEvent('evt-race-1', 'worker-concurrent-1'),
+        service.processSingleEvent('evt-race-1', 'worker-concurrent-2'),
+      ]);
+
+      const succeeded = [worker1Result, worker2Result].filter((r) => r.status === 'PROCESSED');
+      const locked = [worker1Result, worker2Result].filter((r) => r.status === 'LOCKED');
+
+      expect(succeeded.length).toBe(1);
+      expect(locked.length).toBe(1);
+      expect(succeeded[0].success).toBe(true);
+      expect(locked[0].success).toBe(false);
+    });
+
+    it('explicitly rejects unknown outbox event types, marks status FAILED, records lastError, and does NOT mark processed', async () => {
+      const unknownEvent = {
+        id: 'evt-unknown-99',
+        eventType: 'unrecognized.custom.event',
+        aggregateId: 'inc-test-99',
+        status: 'PENDING',
+        processed: false,
+        attempts: 0,
+        payload: { something: true },
+      };
+
+      mockPrisma.outboxEvent.findUnique.mockResolvedValue(unknownEvent);
+      mockPrisma.outboxEvent.update.mockImplementation(({ data }: any) => {
+        Object.assign(unknownEvent, data);
+        return Promise.resolve(unknownEvent);
+      });
+
+      const result = await service.processSingleEvent('evt-unknown-99', 'worker-test');
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('FAILED');
+      expect(result.error).toContain("Unsupported outbox event type: 'unrecognized.custom.event'");
+
+      // Verify database record state:
+      expect(unknownEvent.processed).toBe(false);
+      expect(unknownEvent.status).toBe('FAILED');
+      expect(unknownEvent.lastError).toContain("Unsupported outbox event type: 'unrecognized.custom.event'");
+      expect(unknownEvent.lockedAt).toBeNull();
+      expect(unknownEvent.lockedBy).toBeNull();
+
+      // Verify failure audit log:
+      expect(mockAudit.log).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventType: 'OUTBOX_EVENT_FAILED',
+          incidentId: 'inc-test-99',
+          actorKind: 'WORKER',
+          details: expect.objectContaining({
+            event_type: 'unrecognized.custom.event',
+            error: expect.stringContaining('Unsupported outbox event type'),
+          }),
+        }),
+      );
     });
 
     it('breaks stale locks if previous worker crashed and lease expired', async () => {
@@ -277,10 +366,12 @@ describe('OutboxProcessorService & Outbox Reliability (P0 & P1)', () => {
 
       mockPrisma.outboxEvent.findMany.mockResolvedValue([mockEvent1, mockEvent2]);
 
-      // Event 1 succeeds
-      mockPrisma.outboxEvent.findUnique
-        .mockResolvedValueOnce(mockEvent1)
-        .mockResolvedValueOnce(mockEvent2);
+      // Route findUnique by event ID
+      mockPrisma.outboxEvent.findUnique.mockImplementation(({ where }: any) => {
+        if (where.id === 'evt-1') return Promise.resolve(mockEvent1);
+        if (where.id === 'evt-2') return Promise.resolve(mockEvent2);
+        return Promise.resolve(null);
+      });
 
       mockPrisma.incident.findUnique.mockResolvedValue({
         id: 'inc-multi',
@@ -415,6 +506,86 @@ describe('OutboxProcessorService & Outbox Reliability (P0 & P1)', () => {
         'evt-unprocessed-1',
         'reconciler-direct',
         'EMERGENCY_SOS',
+      );
+    });
+
+    it('enforces bounded retries at 5 attempts and marks permanently FAILED without looping', async () => {
+      const reconciler = new OutboxReconcilerService(
+        mockPrisma,
+        service,
+        mockAudit,
+        undefined,
+        undefined,
+      );
+
+      const exhaustedEvent = {
+        id: 'evt-exhausted-1',
+        aggregateId: 'inc-exhausted',
+        eventType: 'incident.created',
+        status: 'PENDING',
+        attempts: 5,
+        processed: false,
+        payload: { workflow: 'STANDARD_REPORT' },
+      };
+
+      mockPrisma.outboxEvent.findMany.mockResolvedValue([exhaustedEvent]);
+      mockPrisma.outboxEvent.update.mockResolvedValue({ ...exhaustedEvent, status: 'FAILED' });
+
+      const spyProcess = vi.spyOn(service, 'processSingleEvent');
+
+      const outcome = await reconciler.reconcilePendingEvents();
+
+      expect(outcome.failed).toBe(1);
+      expect(outcome.directProcessed).toBe(0);
+      expect(spyProcess).not.toHaveBeenCalled();
+      expect(mockPrisma.outboxEvent.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'evt-exhausted-1' },
+          data: expect.objectContaining({
+            status: 'FAILED',
+            lastError: expect.stringContaining('Max reconciliation retries (5) exceeded'),
+          }),
+        }),
+      );
+    });
+
+    it('deduplicates queued jobs by assigning deterministic jobId', async () => {
+      const mockStandardQueue: any = {
+        add: vi.fn().mockResolvedValue({ id: 'job-1' }),
+      };
+
+      const reconciler = new OutboxReconcilerService(
+        mockPrisma,
+        service,
+        mockAudit,
+        undefined,
+        mockStandardQueue,
+      );
+
+      const pendingEvent = {
+        id: 'evt-std-1',
+        aggregateId: 'inc-std',
+        eventType: 'incident.created',
+        status: 'PENDING',
+        attempts: 2,
+        processed: false,
+        payload: { workflow: 'STANDARD_REPORT' },
+      };
+
+      mockPrisma.outboxEvent.findMany.mockResolvedValue([pendingEvent]);
+
+      const outcome = await reconciler.reconcilePendingEvents();
+
+      expect(outcome.enqueued).toBe(1);
+      expect(mockStandardQueue.add).toHaveBeenCalledWith(
+        'process-standard',
+        expect.objectContaining({
+          outbox_event_id: 'evt-std-1',
+          incident_id: 'inc-std',
+        }),
+        expect.objectContaining({
+          jobId: 'reconcile-evt-std-1-2',
+        }),
       );
     });
   });
