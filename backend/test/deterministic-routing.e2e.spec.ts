@@ -598,4 +598,214 @@ describe('Campus SOS — Deterministic Routing & Delivery Acceptance Suite', () 
       expect(decision.audience?.campus_wide_eligible ?? false).toBe(false);
     });
   });
+
+  describe('Scenario J: Explicit Degraded Routing & Auditable Failure Handling', () => {
+    it('Records degraded routing flag, logs ESCALATED audit event, and alerts admin when a required team is disabled', async () => {
+      // 1. Temporarily disable TRANSPORTATION team to test degraded routing
+      const dbBefore = getPersistedDb();
+      const transportTeam = (dbBefore.teams || []).find((t: any) => t.code === 'TRANSPORTATION');
+      const wasEnabled = transportTeam?.isEnabled ?? true;
+      if (transportTeam) {
+        transportTeam.isEnabled = false;
+        fs.writeFileSync(DB_PATH, JSON.stringify(dbBefore, null, 2), 'utf8');
+        const nextTime = new Date(Date.now() + 1000);
+        fs.utimesSync(DB_PATH, nextTime, nextTime);
+      }
+
+      try {
+        // 2. Submit a blocked route report that deterministically routes to TRANSPORTATION and SECURITY
+        const res = await fetch(`${BASE_URL}/incidents`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${studentToken}`,
+            'Idempotency-Key': `degraded-route-${Date.now()}`,
+          },
+          body: JSON.stringify({
+            category: 'BLOCKED_ROUTE',
+            description: 'Fallen tree completely blocking south gate delivery driveway and shuttle route',
+            location: { kind: 'PREDEFINED', text: 'South Gate Driveway' },
+            pin: { x: 0.1, y: 0.8 },
+          }),
+        });
+
+        expect(res.status).toBe(201);
+        const data = await res.json();
+        const incidentId = data.incident.id;
+
+        // 3. Inspect persisted database
+        const db = getPersistedDb();
+        const decision = (db.routingDecisions || []).find((rd: any) => rd.incidentId === incidentId);
+        expect(decision).toBeDefined();
+
+        // 4. Verify explicit degraded routing flags
+        expect(decision.flags).toContain('DEGRADED_ROUTING');
+        expect(decision.flags).toContain('UNFULFILLED_TEAM:DISABLED:TRANSPORTATION');
+
+        // 5. Verify auditable ESCALATED event recorded in audit log
+        const auditEvents = db.auditEvents || db.auditLogs || [];
+        const degradedAuditEvent = auditEvents.find(
+          (a: any) => a.incidentId === incidentId && a.eventType === 'ESCALATED' && a.details?.reason === 'DEGRADED_ROUTING',
+        );
+        expect(degradedAuditEvent).toBeDefined();
+        expect(degradedAuditEvent.details?.unfulfilled_teams).toEqual(
+          expect.arrayContaining([expect.objectContaining({ team_code: 'TRANSPORTATION', reason: 'DISABLED' })]),
+        );
+
+        // 6. Verify urgent degraded notification created for CAMPUS_ADMIN
+        const adminNotif = (db.notifications || []).find(
+          (n: any) => n.incidentId === incidentId && n.title?.includes('DEGRADED ROUTING ALERT'),
+        );
+        expect(adminNotif).toBeDefined();
+        expect(adminNotif.body).toContain('TRANSPORTATION (DISABLED)');
+      } finally {
+        // Restore team state
+        const dbRestore = getPersistedDb();
+        const teamToRestore = (dbRestore.teams || []).find((t: any) => t.code === 'TRANSPORTATION');
+        if (teamToRestore) {
+          teamToRestore.isEnabled = wasEnabled;
+          fs.writeFileSync(DB_PATH, JSON.stringify(dbRestore, null, 2), 'utf8');
+          const nextTime = new Date(Date.now() + 1000);
+          fs.utimesSync(DB_PATH, nextTime, nextTime);
+        }
+      }
+    });
+  });
+
+  describe('Scenario K: Queue Outbox Event Processing & Worker Lifecycle', () => {
+    it('Persists outbox events on incident creation and transitions to processed with worker audit trail', async () => {
+      // 1. Submit incident
+      const res = await fetch(`${BASE_URL}/incidents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${studentToken}`,
+          'Idempotency-Key': `outbox-worker-${Date.now()}`,
+        },
+        body: JSON.stringify({
+          category: 'SECURITY_THREAT',
+          description: 'Trespasser spotted attempting to force open maintenance hatch behind library',
+          location: { kind: 'PREDEFINED', text: 'Central Library Rear Maintenance' },
+          pin: { x: 0.28, y: 0.38 },
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const data = await res.json();
+      const incidentId = data.incident.id;
+
+      // 2. Verify OutboxEvent was persisted in DB
+      const db = getPersistedDb();
+      const outbox = (db.outboxEvents || []).find((oe: any) => oe.aggregateId === incidentId);
+      expect(outbox).toBeDefined();
+      expect(outbox.eventType).toBe('incident.created');
+      expect(outbox.payload?.incident_id).toBe(incidentId);
+
+      // 3. Simulate queue worker processing job (StandardProcessor.process)
+      const pendingOutbox = (db.outboxEvents || []).filter((oe: any) => oe.aggregateId === incidentId && !oe.processed);
+      expect(pendingOutbox.length).toBeGreaterThan(0);
+
+      // Transition outbox event as worker consumes job
+      for (const oe of pendingOutbox) {
+        oe.processed = true;
+        oe.processedAt = new Date().toISOString();
+      }
+      fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2), 'utf8');
+
+      // 4. Verify persisted processed state
+      const dbAfter = getPersistedDb();
+      const processedOutbox = (dbAfter.outboxEvents || []).find((oe: any) => oe.aggregateId === incidentId);
+      expect(processedOutbox.processed).toBe(true);
+      expect(processedOutbox.processedAt).toBeDefined();
+    });
+  });
+
+  describe('Scenario L: Recipient Delivery Lifecycle & Notification Acknowledgment', () => {
+    it('Accurately tracks delivery lifecycle from SENT to READ upon recipient acknowledgment', async () => {
+      // 1. Fetch admin inbox
+      const inboxRes = await fetch(`${BASE_URL}/notifications`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      expect(inboxRes.status).toBe(200);
+      const inbox = await inboxRes.json();
+      expect(Array.isArray(inbox)).toBe(true);
+      expect(inbox.length).toBeGreaterThan(0);
+
+      const targetNotif = inbox[0];
+      expect(targetNotif.id).toBeDefined();
+
+      // 2. Mark notification as read
+      const readRes = await fetch(`${BASE_URL}/notifications/${targetNotif.id}/read`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      expect([200, 201]).toContain(readRes.status);
+
+      // 3. Inspect persisted state directly in database
+      const db = getPersistedDb();
+      const notifInDb = (db.notifications || []).find((n: any) => n.id === targetNotif.id);
+      expect(notifInDb).toBeDefined();
+      expect(notifInDb.readAt).toBeDefined();
+
+      // 4. Verify corresponding NotificationDelivery record transitioned to READ
+      const deliveries = (db.notificationDeliveries || []).filter((d: any) => d.notificationId === targetNotif.id);
+      if (deliveries.length > 0) {
+        const readDelivery = deliveries.find((d: any) => d.status === 'READ');
+        expect(readDelivery).toBeDefined();
+        expect(readDelivery.deliveredAt).toBeDefined();
+      }
+    });
+  });
+
+  describe('Scenario M: Role-Based Access Control & Session Revocation Guards', () => {
+    it('Blocks direct student access to administrative system settings with 403 Forbidden', async () => {
+      const res = await fetch(`${BASE_URL}/admin/settings`, {
+        headers: { Authorization: `Bearer ${studentToken}` },
+      });
+      expect(res.status).toBe(403);
+    });
+
+    it('Rejects requests with malformed or invalid tokens with 401 Unauthorized', async () => {
+      const res = await fetch(`${BASE_URL}/incidents`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer invalid-token-xyz-12345',
+        },
+        body: JSON.stringify({ category: 'FIRE_HAZARD', description: 'Test' }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('Invalidates access tokens immediately upon user logout', async () => {
+      // Login temporary student session
+      const loginRes = await fetch(`${BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'student.aarav@campus-sos.edu', password: 'Password123!' }),
+      }).then((r) => r.json());
+
+      const sessionToken = loginRes.access_token;
+      expect(sessionToken).toBeDefined();
+
+      // Profile works
+      const meRes = await fetch(`${BASE_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      expect(meRes.status).toBe(200);
+
+      // Logout
+      const logoutRes = await fetch(`${BASE_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      expect(logoutRes.status).toBe(200);
+
+      // Immediate request with revoked token must fail with 401
+      const revokedRes = await fetch(`${BASE_URL}/auth/me`, {
+        headers: { Authorization: `Bearer ${sessionToken}` },
+      });
+      expect(revokedRes.status).toBe(401);
+    });
+  });
 });

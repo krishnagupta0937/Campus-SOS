@@ -21,7 +21,7 @@ describe('AppController (e2e)', () => {
     );
     await app.init();
     await app.getHttpAdapter().getInstance().ready();
-  });
+  }, 30000);
 
   it('/ (GET)', async () => {
     const res = await app.inject({

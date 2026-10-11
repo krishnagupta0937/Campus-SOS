@@ -352,6 +352,10 @@ export class RoutingService {
       // Add teams
       for (const teamDef of rule.teams) {
         if (!enabledTeamCodes.has(teamDef.team)) {
+          if (!flags.includes('DEGRADED_ROUTING')) {
+            flags.push('DEGRADED_ROUTING');
+          }
+          flags.push(`UNFULFILLED_TEAM:DISABLED:${teamDef.team}`);
           flags.push(`TEAM_DISABLED:${teamDef.team}`);
           continue;
         }

@@ -13,6 +13,7 @@ export interface DevDbData {
   attachments: any[];
   outboxEvents: any[];
   auditLogs: any[];
+  auditEvents: any[];
   breakGlassRequests: any[];
   notifications: any[];
   notificationDeliveries: any[];
@@ -39,6 +40,7 @@ export class DevStore {
     attachments: [],
     outboxEvents: [],
     auditLogs: [],
+    auditEvents: [],
     breakGlassRequests: [],
     notifications: [],
     notificationDeliveries: [],
@@ -63,12 +65,37 @@ export class DevStore {
     }
   }
 
+  private lastMtime: number = 0;
+
+  public reloadIfModified() {
+    if (fs.existsSync(this.dbPath)) {
+      try {
+        const stats = fs.statSync(this.dbPath);
+        if (stats.mtimeMs !== this.lastMtime) {
+          const raw = fs.readFileSync(this.dbPath, 'utf8');
+          const parsed = JSON.parse(raw);
+          this.data = { ...this.data, ...parsed };
+          if (!this.data.auditEvents || this.data.auditEvents.length === 0) {
+            this.data.auditEvents = this.data.auditLogs || [];
+          }
+          this.lastMtime = stats.mtimeMs;
+        }
+      } catch (e) {
+        // ignore concurrent read/write errors
+      }
+    }
+  }
+
   private load() {
     if (fs.existsSync(this.dbPath)) {
       try {
         const raw = fs.readFileSync(this.dbPath, 'utf8');
         const parsed = JSON.parse(raw);
         this.data = { ...this.data, ...parsed };
+        if (!this.data.auditEvents || this.data.auditEvents.length === 0) {
+          this.data.auditEvents = this.data.auditLogs || [];
+        }
+        this.lastMtime = fs.statSync(this.dbPath).mtimeMs;
       } catch (e) {
         console.warn('Failed to parse dev db JSON, re-initializing defaults.');
       }
@@ -79,6 +106,9 @@ export class DevStore {
     try {
       this.ensureDataDir();
       fs.writeFileSync(this.dbPath, JSON.stringify(this.data, null, 2), 'utf8');
+      if (fs.existsSync(this.dbPath)) {
+        this.lastMtime = fs.statSync(this.dbPath).mtimeMs;
+      }
     } catch (e) {
       console.error('Failed to save dev db:', e);
     }
@@ -362,7 +392,8 @@ export class DevStore {
       incidentLocation: 'incidentLocations',
       attachment: 'attachments',
       outboxEvent: 'outboxEvents',
-      auditLog: 'auditLogs',
+      auditLog: 'auditEvents',
+      auditEvent: 'auditEvents',
       breakGlassRequest: 'breakGlassRequests',
       notification: 'notifications',
       notificationDelivery: 'notificationDeliveries',
@@ -472,18 +503,21 @@ export class DevStore {
 
     return {
       async findUnique(args: any = {}) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         const found = list.find((item: any) => self.matchWhere(item, where)) || null;
         return args.include ? self.attachIncludes(found, collection, args.include) : found;
       },
       async findFirst(args: any = {}) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         const found = list.find((item: any) => self.matchWhere(item, where)) || null;
         return args.include ? self.attachIncludes(found, collection, args.include) : found;
       },
       async findMany(args: any = {}) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         let res = list.filter((item: any) => self.matchWhere(item, where));
@@ -502,6 +536,7 @@ export class DevStore {
         return res;
       },
       async create(args: any) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         if (args.data?.idempotencyKey) {
           const duplicate = list.find((i: any) => i.idempotencyKey === args.data.idempotencyKey);
@@ -523,6 +558,7 @@ export class DevStore {
         return item;
       },
       async update(args: any) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         const idx = list.findIndex((item: any) => self.matchWhere(item, where));
@@ -550,6 +586,7 @@ export class DevStore {
         return updated;
       },
       async updateMany(args: any = {}) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         let count = 0;
@@ -568,6 +605,7 @@ export class DevStore {
         return { count };
       },
       async delete(args: any) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         const idx = list.findIndex((item: any) => self.matchWhere(item, where));
@@ -580,6 +618,7 @@ export class DevStore {
         return deleted;
       },
       async deleteMany(args: any = {}) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         const remaining = list.filter((item: any) => !self.matchWhere(item, where));
@@ -589,6 +628,7 @@ export class DevStore {
         return { count };
       },
       async count(args: any = {}) {
+        self.reloadIfModified();
         const list = (self.data as any)[collection] || [];
         const where = args.where || {};
         return list.filter((item: any) => self.matchWhere(item, where)).length;

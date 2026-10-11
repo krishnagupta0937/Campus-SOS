@@ -1,7 +1,7 @@
 import {
   Injectable, NotFoundException, ConflictException,
   BadRequestException, ForbiddenException, HttpException, HttpStatus,
-  Optional, Inject, forwardRef,
+  Optional, Inject, forwardRef, Logger,
 } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
@@ -15,6 +15,7 @@ import { generatePublicId, isValidStatusTransition, STATUS_LABELS } from '../../
 
 @Injectable()
 export class IncidentsService {
+  private readonly logger = new Logger(IncidentsService.name);
   private readonly routingService?: RoutingService;
   private readonly aiService?: AiService;
   private readonly dispatchService?: DispatchService;
@@ -94,13 +95,18 @@ export class IncidentsService {
   }
 
   async saveDraftPreview(draftId: string, classificationPreview: any, routingPreview: any) {
-    return this.prisma.incidentDraft.update({
-      where: { id: draftId },
-      data: {
-        classificationPreview,
-        routingPreview,
-      },
-    }).catch(() => null);
+    try {
+      return await this.prisma.incidentDraft.update({
+        where: { id: draftId },
+        data: {
+          classificationPreview,
+          routingPreview,
+        },
+      });
+    } catch (err: any) {
+      this.logger.warn(`Failed to save draft preview for draft ${draftId}: ${err.message}`);
+      return null;
+    }
   }
 
   /**
@@ -201,7 +207,7 @@ export class IncidentsService {
             finalCategory,
             status: 'CREATED',
             confirmedAt: new Date(),
-            firstTeamNotifiedAt: new Date(),
+            firstTeamNotifiedAt: null,
             isRestricted,
             immediateDanger: classification.immediate_danger ?? true,
             campusWideEligible,
@@ -245,7 +251,7 @@ export class IncidentsService {
           }
         }
 
-        // Persist AI classification
+        // Persist AI classification without swallowing errors
         const aiRecord = tx.aiClassification?.create
           ? await tx.aiClassification.create({
               data: {
@@ -259,8 +265,126 @@ export class IncidentsService {
                 output: classification as any,
                 latencyMs: 10,
               },
-            }).catch(() => null)
+            })
           : null;
+
+        // Authoritative deterministic routing fulfillment check:
+        // Check existence, enabled state, and active members for each team.
+        const routedTeamCodes = routingDecision.teams.map((t) => t.team_code);
+        const unfulfilledTeams: Array<{ team_code: string; role: string; reason: 'MISSING_IN_DB' | 'DISABLED' | 'NO_ACTIVE_RECIPIENTS' }> = [];
+        const fulfilledTeams: Array<{ team_code: string; role: string; memberCount: number; teamId: string }> = [];
+
+        if (tx.team?.findFirst) {
+          for (const tDef of routingDecision.teams) {
+            const team = await tx.team.findFirst({ where: { code: tDef.team_code } });
+            if (!team) {
+              unfulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, reason: 'MISSING_IN_DB' });
+              continue;
+            }
+
+            if (team.isEnabled === false) {
+              unfulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, reason: 'DISABLED' });
+              if (tx.incidentTeam?.create) {
+                await tx.incidentTeam.create({
+                  data: {
+                    incidentId: incident.id,
+                    teamId: team.id,
+                    role: tDef.role,
+                    grantedBy: 'ROUTING',
+                  },
+                });
+              }
+              continue;
+            }
+
+            // Find active team members
+            const rawMembers = tx.teamMember?.findMany
+              ? await tx.teamMember.findMany({ where: { teamId: team.id, leftAt: null } })
+              : [];
+
+            const activeMembers: any[] = [];
+            for (const m of rawMembers) {
+              const u = await tx.user.findFirst({ where: { id: m.userId, isActive: true } });
+              if (u) {
+                activeMembers.push(m);
+              }
+            }
+
+            if (activeMembers.length === 0) {
+              unfulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, reason: 'NO_ACTIVE_RECIPIENTS' });
+              if (tx.incidentTeam?.create) {
+                await tx.incidentTeam.create({
+                  data: {
+                    incidentId: incident.id,
+                    teamId: team.id,
+                    role: tDef.role,
+                    grantedBy: 'ROUTING',
+                  },
+                });
+              }
+              continue;
+            }
+
+            // Fulfilled team with active members
+            fulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, memberCount: activeMembers.length, teamId: team.id });
+            if (tx.incidentTeam?.create) {
+              await tx.incidentTeam.create({
+                data: {
+                  incidentId: incident.id,
+                  teamId: team.id,
+                  role: tDef.role,
+                  grantedBy: 'ROUTING',
+                },
+              });
+            }
+
+            // Deliver in-app notification to active team members with status SENT (never premature DELIVERED)
+            for (const m of activeMembers) {
+              if (tx.notification?.create) {
+                const notif = await tx.notification.create({
+                  data: {
+                    recipientUserId: m.userId,
+                    recipientId: m.userId,
+                    incidentId: incident.id,
+                    audienceType: 'RESPONDER',
+                    channel: 'IN_APP',
+                    deliveryStatus: 'SENT',
+                    title: `Emergency SOS Alert: ${publicId}`,
+                    body: `${(payload.description || 'Emergency SOS confirmed').substring(0, 100)}`,
+                    payload: {
+                      incident_id: incident.id,
+                      public_id: publicId,
+                      workflow: 'EMERGENCY_SOS',
+                      team_code: tDef.team_code,
+                      role: tDef.role,
+                    },
+                  },
+                });
+
+                if (notif?.id && tx.notificationDelivery?.create) {
+                  await tx.notificationDelivery.create({
+                    data: {
+                      notificationId: notif.id,
+                      channel: 'IN_APP',
+                      status: 'SENT',
+                      sentAt: new Date(),
+                    },
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        // Determine degraded routing status
+        const isDegraded = unfulfilledTeams.length > 0;
+        const finalFlags = [...(routingDecision.flags || [])];
+        if (isDegraded) {
+          finalFlags.push('DEGRADED_ROUTING');
+          for (const uf of unfulfilledTeams) {
+            finalFlags.push(`UNFULFILLED_TEAM:${uf.reason}:${uf.team_code}`);
+          }
+        }
 
         // Persist authoritative deterministic routing decision
         if (tx.routingDecision?.create) {
@@ -273,63 +397,72 @@ export class IncidentsService {
               teams: routingDecision.teams as any,
               restrictions: { restricted: routingDecision.restricted } as any,
               audience: { campus_wide_eligible: routingDecision.campus_wide_eligible } as any,
-              flags: routingDecision.flags,
+              flags: finalFlags,
             },
-          }).catch(() => null);
+          });
         }
 
-        // Link assigned teams and generate notifications targeting active members
-        const routedTeamCodes = routingDecision.teams.map((t) => t.team_code);
-        if (tx.team?.findFirst) {
-          for (const tDef of routingDecision.teams) {
-            const team = await tx.team.findFirst({ where: { code: tDef.team_code } });
-            if (team && tx.incidentTeam?.create) {
-              await tx.incidentTeam.create({
+        // If at least one team was notified, record firstTeamNotifiedAt
+        let updatedIncident = incident;
+        if (fulfilledTeams.length > 0) {
+          updatedIncident = await tx.incident.update({
+            where: { id: incident.id },
+            data: {
+              firstTeamNotifiedAt: new Date(),
+            },
+          });
+        }
+
+        // If degraded, record auditable ESCALATED event and alert campus admins
+        // Safety design: NEVER rollback emergency SOS record
+        if (isDegraded) {
+          await this.auditService.logWithTransaction(tx, {
+            eventType: 'ESCALATED',
+            incidentId: incident.id,
+            actorKind: 'SYSTEM',
+            details: {
+              reason: 'DEGRADED_ROUTING',
+              unfulfilled_teams: unfulfilledTeams,
+              fulfilled_teams: fulfilledTeams,
+              description: 'Emergency SOS routing unfulfilled for one or more teams',
+            },
+          });
+
+          // Urgent degraded notification to Campus Admin
+          const adminUsers = await tx.user.findMany({
+            where: { role: 'CAMPUS_ADMIN', isActive: true },
+            select: { id: true },
+          });
+          for (const admin of adminUsers) {
+            if (tx.notification?.create) {
+              const notif = await tx.notification.create({
                 data: {
+                  recipientUserId: admin.id,
+                  recipientId: admin.id,
                   incidentId: incident.id,
-                  teamId: team.id,
-                  role: tDef.role,
-                  grantedBy: 'ROUTING',
+                  audienceType: 'ACT',
+                  channel: 'IN_APP',
+                  deliveryStatus: 'SENT',
+                  title: `DEGRADED ROUTING ALERT: Emergency SOS ${publicId}`,
+                  body: `Emergency SOS ${publicId} routing degraded. Unfulfilled teams: ${unfulfilledTeams.map(u => `${u.team_code} (${u.reason})`).join(', ')}`,
+                  payload: {
+                    incident_id: incident.id,
+                    public_id: publicId,
+                    workflow: 'EMERGENCY_SOS',
+                    unfulfilled_teams: unfulfilledTeams,
+                  },
                 },
-              }).catch(() => null);
+              });
 
-              // Deliver in-app notification to active team members with status SENT (never premature DELIVERED)
-              const members = tx.teamMember?.findMany
-                ? await tx.teamMember.findMany({ where: { teamId: team.id, leftAt: null } })
-                : [];
-              for (const m of members) {
-                if (tx.notification?.create) {
-                  const notif = await tx.notification.create({
-                    data: {
-                      recipientUserId: m.userId,
-                      recipientId: m.userId,
-                      incidentId: incident.id,
-                      audienceType: 'RESPONDER',
-                      channel: 'IN_APP',
-                      deliveryStatus: 'SENT',
-                      title: `Emergency SOS Alert: ${publicId}`,
-                      body: `${(payload.description || 'Emergency SOS confirmed').substring(0, 100)}`,
-                      payload: {
-                        incident_id: incident.id,
-                        public_id: publicId,
-                        workflow: 'EMERGENCY_SOS',
-                        team_code: tDef.team_code,
-                        role: tDef.role,
-                      },
-                    },
-                  }).catch(() => null);
-
-                  if (notif?.id && tx.notificationDelivery?.create) {
-                    await tx.notificationDelivery.create({
-                      data: {
-                        notificationId: notif.id,
-                        channel: 'IN_APP',
-                        status: 'SENT',
-                        sentAt: new Date(),
-                      },
-                    }).catch(() => null);
-                  }
-                }
+              if (notif?.id && tx.notificationDelivery?.create) {
+                await tx.notificationDelivery.create({
+                  data: {
+                    notificationId: notif.id,
+                    channel: 'IN_APP',
+                    status: 'SENT',
+                    sentAt: new Date(),
+                  },
+                });
               }
             }
           }
@@ -346,7 +479,12 @@ export class IncidentsService {
               public_id: publicId,
               reporter_id: reporterId,
               routed_teams: routedTeamCodes,
-              routing_decision: routingDecision,
+              routing_decision: {
+                ...routingDecision,
+                flags: finalFlags,
+              },
+              is_degraded: isDegraded,
+              unfulfilled_teams: unfulfilledTeams,
             },
           },
         });
@@ -357,7 +495,7 @@ export class IncidentsService {
           incidentId: incident.id,
           actorUserId: reporterId,
           actorKind: 'USER',
-          details: { public_id: publicId, workflow: 'EMERGENCY_SOS' },
+          details: { public_id: publicId, workflow: 'EMERGENCY_SOS', is_degraded: isDegraded },
         });
 
         await this.auditService.logWithTransaction(tx, {
@@ -369,13 +507,15 @@ export class IncidentsService {
             matched_rules: routingDecision.matched_rules,
             routed_teams: routedTeamCodes,
             restricted: isRestricted,
+            flags: finalFlags,
+            is_degraded: isDegraded,
           },
         });
 
         // Delete draft atomically inside transaction to prevent duplicate confirmations
         await tx.incidentDraft.delete({ where: { id: draftId } });
 
-        return incident;
+        return updatedIncident;
       });
     } catch (err: any) {
       // Concurrency check: If another concurrent transaction created with this idempotency key
@@ -412,7 +552,7 @@ export class IncidentsService {
           'EMERGENCY_SOS',
         );
       } catch (dispatchErr: any) {
-        console.warn('Dispatch initiation warning (proceeding resiliently):', dispatchErr?.message);
+        this.logger.warn(`Dispatch initiation warning (proceeding resiliently): ${dispatchErr?.message}`);
       }
     }
 
@@ -428,8 +568,8 @@ export class IncidentsService {
           backoff: { type: 'exponential', delay: 1000 },
         });
       }
-    } catch {
-      // Queue failure doesn't block confirmation — watchdog will pick it up
+    } catch (queueErr: any) {
+      this.logger.warn(`Failed to enqueue SOS job for incident ${result.id}: ${queueErr?.message}`);
     }
 
     return {
@@ -555,11 +695,11 @@ export class IncidentsService {
             description: data.description,
             studentCategory: data.category,
             finalCategory,
-            status: 'TEAMS_NOTIFIED',
+            status: 'CREATED',
             isRestricted,
             immediateDanger: classification.immediate_danger || false,
             campusWideEligible,
-            firstTeamNotifiedAt: new Date(),
+            firstTeamNotifiedAt: null,
             idempotencyKey,
           },
         });
@@ -592,7 +732,7 @@ export class IncidentsService {
           }
         }
 
-        // Persist AI classification
+        // Persist AI classification without swallowing errors
         const aiRecord = tx.aiClassification?.create
           ? await tx.aiClassification.create({
               data: {
@@ -606,8 +746,139 @@ export class IncidentsService {
                 output: classification as any,
                 latencyMs: 10,
               },
-            }).catch(() => null)
+            })
           : null;
+
+        // Authoritative deterministic routing fulfillment check:
+        // Check existence, enabled state, and active members for each team.
+        const routedTeamCodes = routingDecision.teams.map((t) => t.team_code);
+        const unfulfilledTeams: Array<{ team_code: string; role: string; reason: 'MISSING_IN_DB' | 'DISABLED' | 'NO_ACTIVE_RECIPIENTS' }> = [];
+        const fulfilledTeams: Array<{ team_code: string; role: string; memberCount: number; teamId: string }> = [];
+
+        // Pick up any unfulfilled/disabled teams flagged by routing engine
+        for (const f of (routingDecision.flags || [])) {
+          if (f.startsWith('UNFULFILLED_TEAM:')) {
+            const parts = f.split(':');
+            unfulfilledTeams.push({ team_code: parts[2], role: 'ACT', reason: parts[1] as any });
+          }
+        }
+
+        if (tx.team?.findFirst) {
+          for (const tDef of routingDecision.teams) {
+            const team = await tx.team.findFirst({ where: { code: tDef.team_code } });
+            if (!team) {
+              unfulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, reason: 'MISSING_IN_DB' });
+              continue;
+            }
+
+            if (team.isEnabled === false) {
+              unfulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, reason: 'DISABLED' });
+              if (tx.incidentTeam?.create) {
+                await tx.incidentTeam.create({
+                  data: {
+                    incidentId: incident.id,
+                    teamId: team.id,
+                    role: tDef.role,
+                    grantedBy: 'ROUTING',
+                  },
+                });
+              }
+              continue;
+            }
+
+            // Find active team members
+            const rawMembers = tx.teamMember?.findMany
+              ? await tx.teamMember.findMany({ where: { teamId: team.id, leftAt: null } })
+              : [];
+
+            const activeMembers: any[] = [];
+            for (const m of rawMembers) {
+              const u = await tx.user.findFirst({ where: { id: m.userId, isActive: true } });
+              if (u) {
+                activeMembers.push(m);
+              }
+            }
+
+            if (activeMembers.length === 0) {
+              unfulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, reason: 'NO_ACTIVE_RECIPIENTS' });
+              if (tx.incidentTeam?.create) {
+                await tx.incidentTeam.create({
+                  data: {
+                    incidentId: incident.id,
+                    teamId: team.id,
+                    role: tDef.role,
+                    grantedBy: 'ROUTING',
+                  },
+                });
+              }
+              continue;
+            }
+
+            // Fulfilled team with active members
+            fulfilledTeams.push({ team_code: tDef.team_code, role: tDef.role, memberCount: activeMembers.length, teamId: team.id });
+            if (tx.incidentTeam?.create) {
+              await tx.incidentTeam.create({
+                data: {
+                  incidentId: incident.id,
+                  teamId: team.id,
+                  role: tDef.role,
+                  grantedBy: 'ROUTING',
+                },
+              });
+            }
+
+            // Deliver in-app notification to active team members with status SENT (never premature DELIVERED)
+            for (const m of activeMembers) {
+              if (tx.notification?.create) {
+                const notif = await tx.notification.create({
+                  data: {
+                    recipientUserId: m.userId,
+                    recipientId: m.userId,
+                    incidentId: incident.id,
+                    audienceType: 'RESPONDER',
+                    channel: 'IN_APP',
+                    deliveryStatus: 'SENT',
+                    title: `New Incident Assigned: ${publicId}`,
+                    body: `${data.description.substring(0, 100)}`,
+                    payload: {
+                      incident_id: incident.id,
+                      public_id: publicId,
+                      workflow: 'STANDARD_REPORT',
+                      team_code: tDef.team_code,
+                      role: tDef.role,
+                    },
+                  },
+                });
+
+                if (notif?.id && tx.notificationDelivery?.create) {
+                  await tx.notificationDelivery.create({
+                    data: {
+                      notificationId: notif.id,
+                      channel: 'IN_APP',
+                      status: 'SENT',
+                      sentAt: new Date(),
+                    },
+                  });
+                }
+              }
+            }
+          }
+        }
+
+        // Determine degraded routing status
+        const isDegraded = unfulfilledTeams.length > 0;
+        const finalFlags = [...(routingDecision.flags || [])];
+        if (isDegraded) {
+          if (!finalFlags.includes('DEGRADED_ROUTING')) {
+            finalFlags.push('DEGRADED_ROUTING');
+          }
+          for (const uf of unfulfilledTeams) {
+            const tag = `UNFULFILLED_TEAM:${uf.reason}:${uf.team_code}`;
+            if (!finalFlags.includes(tag)) {
+              finalFlags.push(tag);
+            }
+          }
+        }
 
         // Persist authoritative deterministic routing decision
         if (tx.routingDecision?.create) {
@@ -620,63 +891,78 @@ export class IncidentsService {
               teams: routingDecision.teams as any,
               restrictions: { restricted: routingDecision.restricted } as any,
               audience: { campus_wide_eligible: routingDecision.campus_wide_eligible } as any,
-              flags: routingDecision.flags,
+              flags: finalFlags,
             },
-          }).catch(() => null);
+          });
         }
 
-        // Link assigned teams and generate notifications targeting active members
-        const routedTeamCodes = routingDecision.teams.map((t) => t.team_code);
-        if (tx.team?.findFirst) {
-          for (const tDef of routingDecision.teams) {
-            const team = await tx.team.findFirst({ where: { code: tDef.team_code } });
-            if (team && tx.incidentTeam?.create) {
-              await tx.incidentTeam.create({
+        // Authoritative status transition:
+        // If at least one team was notified, status is TEAMS_NOTIFIED.
+        // If 0 teams could be fulfilled, status remains CREATED (never falsely shown as fully routed).
+        let finalStatus = 'CREATED';
+        let notifiedAt: Date | null = null;
+        if (fulfilledTeams.length > 0) {
+          finalStatus = 'TEAMS_NOTIFIED';
+          notifiedAt = new Date();
+        }
+
+        const updatedIncident = await tx.incident.update({
+          where: { id: incident.id },
+          data: {
+            status: finalStatus,
+            firstTeamNotifiedAt: notifiedAt,
+          },
+        });
+
+        // Record degraded audit event and alert coordinator if degraded
+        if (isDegraded) {
+          await this.auditService.logWithTransaction(tx, {
+            eventType: 'ESCALATED',
+            incidentId: incident.id,
+            actorKind: 'SYSTEM',
+            details: {
+              reason: 'DEGRADED_ROUTING',
+              unfulfilled_teams: unfulfilledTeams,
+              fulfilled_teams: fulfilledTeams,
+              description: 'Standard report routing unfulfilled for one or more teams',
+            },
+          });
+
+          // Alert campus admins of degraded routing
+          const adminUsers = await tx.user.findMany({
+            where: { role: 'CAMPUS_ADMIN', isActive: true },
+            select: { id: true },
+          });
+          for (const admin of adminUsers) {
+            if (tx.notification?.create) {
+              const notif = await tx.notification.create({
                 data: {
+                  recipientUserId: admin.id,
+                  recipientId: admin.id,
                   incidentId: incident.id,
-                  teamId: team.id,
-                  role: tDef.role,
-                  grantedBy: 'ROUTING',
+                  audienceType: 'ACT',
+                  channel: 'IN_APP',
+                  deliveryStatus: 'SENT',
+                  title: `DEGRADED ROUTING ALERT: ${publicId}`,
+                  body: `Standard report ${publicId} routing degraded. Unfulfilled teams: ${unfulfilledTeams.map(u => `${u.team_code} (${u.reason})`).join(', ')}`,
+                  payload: {
+                    incident_id: incident.id,
+                    public_id: publicId,
+                    workflow: 'STANDARD_REPORT',
+                    unfulfilled_teams: unfulfilledTeams,
+                  },
                 },
-              }).catch(() => null);
+              });
 
-              // Deliver in-app notification to active team members with status SENT (never premature DELIVERED)
-              const members = tx.teamMember?.findMany
-                ? await tx.teamMember.findMany({ where: { teamId: team.id, leftAt: null } })
-                : [];
-              for (const m of members) {
-                if (tx.notification?.create) {
-                  const notif = await tx.notification.create({
-                    data: {
-                      recipientUserId: m.userId,
-                      recipientId: m.userId,
-                      incidentId: incident.id,
-                      audienceType: 'RESPONDER',
-                      channel: 'IN_APP',
-                      deliveryStatus: 'SENT',
-                      title: `New Incident Assigned: ${publicId}`,
-                      body: `${data.description.substring(0, 100)}`,
-                      payload: {
-                        incident_id: incident.id,
-                        public_id: publicId,
-                        workflow: 'STANDARD_REPORT',
-                        team_code: tDef.team_code,
-                        role: tDef.role,
-                      },
-                    },
-                  }).catch(() => null);
-
-                  if (notif?.id && tx.notificationDelivery?.create) {
-                    await tx.notificationDelivery.create({
-                      data: {
-                        notificationId: notif.id,
-                        channel: 'IN_APP',
-                        status: 'SENT',
-                        sentAt: new Date(),
-                      },
-                    }).catch(() => null);
-                  }
-                }
+              if (notif?.id && tx.notificationDelivery?.create) {
+                await tx.notificationDelivery.create({
+                  data: {
+                    notificationId: notif.id,
+                    channel: 'IN_APP',
+                    status: 'SENT',
+                    sentAt: new Date(),
+                  },
+                });
               }
             }
           }
@@ -695,7 +981,12 @@ export class IncidentsService {
               student_category: data.category,
               final_category: finalCategory,
               routed_teams: routedTeamCodes,
-              routing_decision: routingDecision,
+              routing_decision: {
+                ...routingDecision,
+                flags: finalFlags,
+              },
+              is_degraded: isDegraded,
+              unfulfilled_teams: unfulfilledTeams,
             },
           },
         });
@@ -706,7 +997,7 @@ export class IncidentsService {
           incidentId: incident.id,
           actorUserId: reporterId,
           actorKind: 'USER',
-          details: { public_id: publicId, workflow: 'STANDARD_REPORT', category: data.category, final_category: finalCategory },
+          details: { public_id: publicId, workflow: 'STANDARD_REPORT', category: data.category, final_category: finalCategory, is_degraded: isDegraded },
         });
 
         await this.auditService.logWithTransaction(tx, {
@@ -718,10 +1009,12 @@ export class IncidentsService {
             matched_rules: routingDecision.matched_rules,
             routed_teams: routedTeamCodes,
             restricted: isRestricted,
+            flags: finalFlags,
+            is_degraded: isDegraded,
           },
         });
 
-        return incident;
+        return updatedIncident;
       });
     } catch (err: any) {
       if (
@@ -758,8 +1051,8 @@ export class IncidentsService {
           backoff: { type: 'exponential', delay: 2000 },
         });
       }
-    } catch {
-      // Watchdog handles retry
+    } catch (queueErr: any) {
+      this.logger.warn(`Failed to enqueue standard report job for incident ${result.id}: ${queueErr?.message}`);
     }
 
     return {
@@ -1343,18 +1636,32 @@ export class IncidentsService {
       select: { id: true },
     });
     for (const admin of admins) {
-      await this.prisma.notification.create({
-        data: {
-          recipientUserId: admin.id,
-          recipientId: admin.id,
-          incidentId,
-          audienceType: 'ACT',
-          channel: 'IN_APP',
-          deliveryStatus: 'DELIVERED',
-          title: `Incident Escalation Alert: ${incident.publicId}`,
-          body: `Incident ${incident.publicId} has been escalated by ${user.fullName || user.email}. Immediate review requested.`,
-        },
-      }).catch(() => null);
+      try {
+        const notif = await this.prisma.notification.create({
+          data: {
+            recipientUserId: admin.id,
+            recipientId: admin.id,
+            incidentId,
+            audienceType: 'ACT',
+            channel: 'IN_APP',
+            deliveryStatus: 'SENT',
+            title: `Incident Escalation Alert: ${incident.publicId}`,
+            body: `Incident ${incident.publicId} has been escalated by ${user.fullName || user.email}. Immediate review requested.`,
+          },
+        });
+        if (notif?.id && this.prisma.notificationDelivery?.create) {
+          await this.prisma.notificationDelivery.create({
+            data: {
+              notificationId: notif.id,
+              channel: 'IN_APP',
+              status: 'SENT',
+              sentAt: new Date(),
+            },
+          });
+        }
+      } catch (err: any) {
+        this.logger.error(`Failed to deliver escalation notification to admin ${admin.id}: ${err.message}`);
+      }
     }
 
     return { escalated: true, incident_id: incidentId };

@@ -34,20 +34,57 @@ export class NotificationsService {
    * Mark a notification as read.
    */
   async markRead(notificationId: string, userId: string) {
-    return this.prisma.notification.updateMany({
+    const updated = await this.prisma.notification.updateMany({
       where: { id: notificationId, recipientUserId: userId },
       data: { readAt: new Date() },
     });
+
+    if (this.prisma.notificationDelivery?.updateMany) {
+      await this.prisma.notificationDelivery.updateMany({
+        where: {
+          notificationId,
+          status: { not: 'READ' },
+        },
+        data: {
+          status: 'READ',
+          deliveredAt: new Date(),
+        },
+      });
+    }
+
+    return updated;
   }
 
   /**
    * Mark all notifications as read.
    */
   async markAllRead(userId: string) {
-    return this.prisma.notification.updateMany({
+    const notifications = await this.prisma.notification.findMany({
+      where: { recipientUserId: userId, readAt: null },
+      select: { id: true },
+    });
+
+    const notifIds = notifications.map((n: any) => n.id);
+
+    const updated = await this.prisma.notification.updateMany({
       where: { recipientUserId: userId, readAt: null },
       data: { readAt: new Date() },
     });
+
+    if (notifIds.length > 0 && this.prisma.notificationDelivery?.updateMany) {
+      await this.prisma.notificationDelivery.updateMany({
+        where: {
+          notificationId: { in: notifIds },
+          status: { not: 'READ' },
+        },
+        data: {
+          status: 'READ',
+          deliveredAt: new Date(),
+        },
+      });
+    }
+
+    return updated;
   }
 
   /**

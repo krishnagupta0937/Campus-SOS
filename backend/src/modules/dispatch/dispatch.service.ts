@@ -1,4 +1,4 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Injectable, ConflictException, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { PrismaService } from '../../database/prisma.service';
@@ -10,6 +10,8 @@ import { AuditService } from '../audit/audit.service';
  */
 @Injectable()
 export class DispatchService {
+  private readonly logger = new Logger(DispatchService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditService: AuditService,
@@ -344,18 +346,32 @@ export class DispatchService {
 
     if (team?.members) {
       for (const m of team.members) {
-        await this.prisma.notification.create({
-          data: {
-            recipientUserId: m.userId,
-            recipientId: m.userId,
-            incidentId,
-            audienceType: 'ACT',
-            channel: 'IN_APP',
-            deliveryStatus: 'DELIVERED',
-            title: `Dispatch Escalation Alert: ${team.code}`,
-            body: `Incident requires coordinator review — all automated dispatch attempts exhausted.`,
-          },
-        }).catch(() => null);
+        try {
+          const notif = await this.prisma.notification.create({
+            data: {
+              recipientUserId: m.userId,
+              recipientId: m.userId,
+              incidentId,
+              audienceType: 'ACT',
+              channel: 'IN_APP',
+              deliveryStatus: 'SENT',
+              title: `Dispatch Escalation Alert: ${team.code}`,
+              body: `Incident requires coordinator review — all automated dispatch attempts exhausted.`,
+            },
+          });
+          if (notif?.id && this.prisma.notificationDelivery?.create) {
+            await this.prisma.notificationDelivery.create({
+              data: {
+                notificationId: notif.id,
+                channel: 'IN_APP',
+                status: 'SENT',
+                sentAt: new Date(),
+              },
+            });
+          }
+        } catch (err: any) {
+          this.logger.error(`Failed to deliver dispatch escalation notification to user ${m.userId}: ${err.message}`, err.stack);
+        }
       }
     }
   }
