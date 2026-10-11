@@ -1,11 +1,15 @@
 import { Controller, Post, Get, Body, Param, Query, Headers, HttpCode, HttpStatus } from '@nestjs/common';
 import { IncidentsService } from './incidents.service';
+import { DispatchService } from '../dispatch/dispatch.service';
 import { Roles, CurrentUser } from '../../common/decorators';
 import { AuthUser } from '../../common/guards/jwt-auth.guard';
 
 @Controller()
 export class IncidentsController {
-  constructor(private readonly incidentsService: IncidentsService) {}
+  constructor(
+    private readonly incidentsService: IncidentsService,
+    private readonly dispatchService: DispatchService,
+  ) {}
 
   // Standard Reports
   @Post('incidents')
@@ -51,7 +55,7 @@ export class IncidentsController {
     @CurrentUser() user: AuthUser,
     @Body() body: { note: string },
   ) {
-    return { added: true };
+    return this.incidentsService.addFollowUpNote(incidentId, user.id, body.note);
   }
 
   // Team workspace
@@ -94,7 +98,7 @@ export class IncidentsController {
     @CurrentUser() user: AuthUser,
     @Body() body: { note: string },
   ) {
-    return { added: true };
+    return this.incidentsService.addTeamNote(incidentId, user.id, body.note);
   }
 
   @Post('team/incidents/:id/escalate')
@@ -102,13 +106,13 @@ export class IncidentsController {
     @Param('id') incidentId: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return { escalated: true };
+    return this.incidentsService.escalateIncident(incidentId, user);
   }
 
   // Responder assignment actions
   @Get('responder/offers')
   async getOffers(@CurrentUser() user: AuthUser) {
-    return [];
+    return this.dispatchService.getOffersForUser(user.id);
   }
 
   @Post('responder/offers/:assignmentId/accept')
@@ -116,7 +120,7 @@ export class IncidentsController {
     @Param('assignmentId') assignmentId: string,
     @CurrentUser() user: AuthUser,
   ) {
-    return { accepted: true };
+    return this.dispatchService.acceptOffer(assignmentId, user.id);
   }
 
   @Post('responder/offers/:assignmentId/reject')
@@ -125,17 +129,17 @@ export class IncidentsController {
     @CurrentUser() user: AuthUser,
     @Body() body: { reason?: string },
   ) {
-    return { rejected: true };
+    return this.dispatchService.rejectOffer(assignmentId, user.id, body?.reason);
   }
 
   @Post('responder/assignments/:id/en-route')
   async markEnRoute(@Param('id') assignmentId: string, @CurrentUser() user: AuthUser) {
-    return { status: 'EN_ROUTE' };
+    return this.dispatchService.markEnRoute(assignmentId, user.id);
   }
 
   @Post('responder/assignments/:id/on-scene')
   async markOnScene(@Param('id') assignmentId: string, @CurrentUser() user: AuthUser) {
-    return { status: 'ON_SCENE' };
+    return this.dispatchService.markOnScene(assignmentId, user.id);
   }
 
   @Post('responder/assignments/:id/complete')
@@ -144,7 +148,7 @@ export class IncidentsController {
     @CurrentUser() user: AuthUser,
     @Body() body: { resolution_summary: string },
   ) {
-    return { status: 'COMPLETED' };
+    return this.dispatchService.completeAssignment(assignmentId, user.id, body.resolution_summary);
   }
 
   // Admin endpoints
@@ -185,9 +189,10 @@ export class IncidentsController {
   async adminAssign(
     @Param('id') incidentId: string,
     @CurrentUser() user: AuthUser,
-    @Body() body: { team_id: string; member_id?: string },
+    @Body() body: { team_id: string; member_id?: string; responder_user_id?: string },
   ) {
-    return { assigned: true };
+    const memberId = body.member_id || body.responder_user_id;
+    return this.incidentsService.adminAssign(incidentId, user.id, body.team_id, memberId);
   }
 
   @Post('admin/incidents/:id/reclassify')
@@ -197,6 +202,6 @@ export class IncidentsController {
     @CurrentUser() user: AuthUser,
     @Body() body: { category: string },
   ) {
-    return { reclassified: true };
+    return this.incidentsService.adminReclassify(incidentId, user.id, body.category);
   }
 }

@@ -72,6 +72,19 @@ export class DevStore {
     }
   }
 
+  public createSnapshot(): string {
+    return JSON.stringify(this.data);
+  }
+
+  public restoreSnapshot(snapshot: string): void {
+    try {
+      this.data = JSON.parse(snapshot);
+      this.save();
+    } catch (e) {
+      console.error('Failed to restore dev db snapshot:', e);
+    }
+  }
+
   private seedDefaults() {
     // 1. Teams
     const canonicalTeams = [
@@ -107,6 +120,16 @@ export class DevStore {
         userType: 'student',
         isActive: true,
         phone: '+91 98765 43210',
+        teamCode: null,
+      },
+      {
+        id: 'usr_student_02',
+        email: 'student.aarav@campus-sos.edu',
+        fullName: 'Aarav Patel',
+        role: 'STUDENT',
+        userType: 'student',
+        isActive: true,
+        phone: '+91 98765 43211',
         teamCode: null,
       },
       {
@@ -250,13 +273,13 @@ export class DevStore {
       }
     }
 
-    // 3. Emergency Hotlines
+    // 3. Emergency Hotlines (Development sample mocks - unverified in production)
     const canonicalHotlines = [
       {
         id: 'hotline_police_01',
         label: 'Central Campus Police & Security Control',
         phone: '+91 1800-226-787',
-        description: '24/7 immediate security response and campus patrol dispatch',
+        description: '[DEMO / TEST CONTACT ONLY - Unverified] 24/7 immediate security response and campus patrol dispatch',
         sortOrder: 1,
         is24x7: true,
         isActive: true,
@@ -265,7 +288,7 @@ export class DevStore {
         id: 'hotline_health_01',
         label: 'Campus Health Clinic & Ambulance',
         phone: '+91 1800-226-911',
-        description: 'Emergency trauma, ambulance dispatch, and round-the-clock medical triage',
+        description: '[DEMO / TEST CONTACT ONLY - Unverified] Emergency trauma, ambulance dispatch, and medical triage',
         sortOrder: 2,
         is24x7: true,
         isActive: true,
@@ -274,7 +297,7 @@ export class DevStore {
         id: 'hotline_women_01',
         label: 'Women Safety Cell & Confidential Support',
         phone: '+91 1800-226-100',
-        description: 'Confidential reporting, crisis counseling, and physical safety escort',
+        description: '[DEMO / TEST CONTACT ONLY - Unverified] Confidential reporting and counseling',
         sortOrder: 3,
         is24x7: true,
         isActive: true,
@@ -283,7 +306,7 @@ export class DevStore {
         id: 'hotline_proctor_01',
         label: 'Chief Proctor Grievance Helpline',
         phone: '+91 1800-226-444',
-        description: 'Campus discipline, anti-ragging escalation, and student dispute resolution',
+        description: '[DEMO / TEST CONTACT ONLY - Unverified] Anti-ragging escalation and student dispute resolution',
         sortOrder: 4,
         is24x7: true,
         isActive: true,
@@ -410,6 +433,14 @@ export class DevStore {
       },
       async create(args: any) {
         const list = (self.data as any)[collection] || [];
+        if (args.data?.idempotencyKey) {
+          const duplicate = list.find((i: any) => i.idempotencyKey === args.data.idempotencyKey);
+          if (duplicate) {
+            const error: any = new Error(`Unique constraint failed on the fields: (idempotency_key)`);
+            error.code = 'P2002';
+            throw error;
+          }
+        }
         const item = {
           id: args.data.id || uuidv4(),
           createdAt: new Date(),

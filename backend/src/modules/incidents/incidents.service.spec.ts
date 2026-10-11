@@ -139,6 +139,10 @@ describe('IncidentsService (SOS Fast Path, Idempotency & State Machine)', () => 
         expect.objectContaining({ incident_id: 'inc-sos-1' }),
         expect.any(Object),
       );
+      // Verify draft was deleted atomically within the transaction
+      expect(mockPrisma.incidentDraft.delete).toHaveBeenCalledWith({
+        where: { id: 'draft-1' },
+      });
     });
 
     it('should handle idempotency replay safely without creating duplicate incidents', async () => {
@@ -156,6 +160,38 @@ describe('IncidentsService (SOS Fast Path, Idempotency & State Machine)', () => 
       // No new creation in DB
       expect(mockPrisma.incident.create).not.toHaveBeenCalled();
       expect(mockSosQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('should catch concurrent P2002 race condition during transaction and return idempotency replay', async () => {
+      // First lookup passes (no record yet)
+      mockPrisma.incident.findUnique.mockResolvedValueOnce(null);
+
+      mockPrisma.incidentDraft.findFirst.mockResolvedValue({
+        id: 'draft-race-1',
+        reporterId: 'user-1',
+        workflow: 'EMERGENCY_SOS',
+        expiresAt: new Date(Date.now() + 60000),
+        payload: { description: 'Concurrent race condition test' },
+      });
+
+      // Transaction throws P2002 unique constraint error (simulating concurrent insert commit)
+      const p2002Error: any = new Error('Unique constraint failed on the fields: (idempotency_key)');
+      p2002Error.code = 'P2002';
+      mockPrisma.$transaction.mockRejectedValueOnce(p2002Error);
+
+      // Re-fetch returns the committed record
+      mockPrisma.incident.findUnique.mockResolvedValueOnce({
+        id: 'inc-race-winner',
+        publicId: 'SOS-2026-000099',
+        status: 'CREATED',
+        workflow: 'EMERGENCY_SOS',
+      });
+
+      const result = await service.confirmSosDraft('draft-race-1', 'user-1', 'concurrent-key-1');
+
+      expect(result.idempotency_replay).toBe(true);
+      expect(result.incident.id).toBe('inc-race-winner');
+      expect(result.incident.public_id).toBe('SOS-2026-000099');
     });
   });
 

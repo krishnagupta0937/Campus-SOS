@@ -6,6 +6,7 @@ import { PrismaService } from '../../database/prisma.service';
 import { AuthUser } from '../../common/guards/jwt-auth.guard';
 import { generateSecureToken, hashToken } from '../../common/utils/crypto.utils';
 import { LoginDto, RefreshDto } from './dto/auth.dto';
+import { TokenRevocationService } from './token-revocation.service';
 
 @Injectable()
 export class AuthService {
@@ -17,6 +18,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly tokenRevocationService: TokenRevocationService,
   ) {}
 
   async login(dto: LoginDto, ipAddress?: string) {
@@ -121,12 +123,15 @@ export class AuthService {
     return this.generateAuthResponse(session.user, session.id);
   }
 
-  async logout(userId: string) {
+  async logout(userId: string, accessToken?: string) {
     // Revoke all sessions for the user
     await this.prisma.session.updateMany({
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+
+    // Revoke access token immediately
+    this.tokenRevocationService.revokeUser(userId, accessToken);
   }
 
   async getProfile(userId: string) {

@@ -58,23 +58,37 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   }
 
   async onModuleInit() {
+    const requirePostgres =
+      process.env.REQUIRE_POSTGRES === 'true' ||
+      (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEVSTORE_IN_PROD !== 'true');
+
     try {
       await this.$connect();
       this.isPostgresConnected = true;
       console.log('✅ Connected to PostgreSQL at localhost:5432');
     } catch (err) {
       this.isPostgresConnected = false;
-      console.warn('⚠️ PostgreSQL at localhost:5432 not reachable. Using resilient persistent DevStore engine.');
+      if (requirePostgres) {
+        console.error('❌ PostgreSQL connection failed and strict mode is active (REQUIRE_POSTGRES=true or NODE_ENV=production):', err);
+        throw new Error('PostgreSQL connection failed. Strict persistence mode requires a live database connection.');
+      }
+      console.warn('⚠️ PostgreSQL at localhost:5432 not reachable. Using resilient persistent DevStore engine (Development fallback only).');
     }
   }
 
   // Override $transaction
-  override $transaction(arg: any, options?: any): Promise<any> {
+  override async $transaction(arg: any, options?: any): Promise<any> {
     if (this.isPostgresConnected) {
       return super.$transaction(arg, options);
     }
     if (typeof arg === 'function') {
-      return arg(this);
+      const snapshot = this.devStore.createSnapshot();
+      try {
+        return await arg(this);
+      } catch (err) {
+        this.devStore.restoreSnapshot(snapshot);
+        throw err;
+      }
     }
     if (Array.isArray(arg)) {
       return Promise.all(arg);

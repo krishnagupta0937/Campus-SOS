@@ -192,4 +192,92 @@ describe('DispatchService (Availability, Concurrency & Timeouts)', () => {
       );
     });
   });
+
+  describe('Responder Lifecycle (En-route, On-scene, Complete)', () => {
+    it('should transition assignment to EN_ROUTE and update incident status', async () => {
+      mockPrisma.assignment.findUnique.mockResolvedValue({
+        id: 'asgn-1',
+        incidentId: 'inc-1',
+        status: 'ACCEPTED',
+        member: { userId: 'resp-user-1' },
+      });
+      mockPrisma.assignment.update.mockResolvedValue({ id: 'asgn-1', status: 'EN_ROUTE' });
+      mockPrisma.incident.update = vi.fn().mockResolvedValue({});
+      mockPrisma.incidentStatusHistory = { create: vi.fn().mockResolvedValue({}) };
+
+      const result = await service.markEnRoute('asgn-1', 'resp-user-1');
+      expect(result.status).toBe('EN_ROUTE');
+      expect(mockPrisma.assignment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'asgn-1' },
+          data: { status: 'EN_ROUTE' },
+        }),
+      );
+      expect(mockPrisma.incident.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'inc-1' },
+          data: { status: 'RESPONDER_ON_THE_WAY' },
+        }),
+      );
+    });
+
+    it('should transition assignment to ON_SCENE and record responder arrival', async () => {
+      mockPrisma.assignment.findUnique.mockResolvedValue({
+        id: 'asgn-1',
+        incidentId: 'inc-1',
+        status: 'EN_ROUTE',
+        member: { userId: 'resp-user-1' },
+      });
+      mockPrisma.assignment.update.mockResolvedValue({ id: 'asgn-1', status: 'ON_SCENE' });
+      mockPrisma.incident.update = vi.fn().mockResolvedValue({});
+      mockPrisma.incidentStatusHistory = { create: vi.fn().mockResolvedValue({}) };
+
+      const result = await service.markOnScene('asgn-1', 'resp-user-1');
+      expect(result.status).toBe('ON_SCENE');
+      expect(mockPrisma.incident.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'inc-1' },
+          data: expect.objectContaining({
+            status: 'RESPONDER_AT_LOCATION',
+            responderArrivedAt: expect.any(Date),
+          }),
+        }),
+      );
+    });
+
+    it('should complete assignment, resolve incident, and revert responder to AVAILABLE', async () => {
+      mockPrisma.assignment.findUnique.mockResolvedValue({
+        id: 'asgn-1',
+        incidentId: 'inc-1',
+        memberId: 'mem-1',
+        status: 'ON_SCENE',
+        member: { userId: 'resp-user-1' },
+      });
+      mockPrisma.assignment.update.mockResolvedValue({ id: 'asgn-1', status: 'COMPLETED' });
+      mockPrisma.incident.update = vi.fn().mockResolvedValue({});
+      mockPrisma.responderProfile.update.mockResolvedValue({});
+      mockPrisma.incidentStatusHistory = { create: vi.fn().mockResolvedValue({}) };
+
+      const result = await service.completeAssignment('asgn-1', 'resp-user-1', 'Resolved water leak and repaired valve');
+      expect(result.status).toBe('COMPLETED');
+      expect(mockPrisma.incident.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'inc-1' },
+          data: expect.objectContaining({
+            status: 'RESOLVED',
+            resolutionSummary: 'Resolved water leak and repaired valve',
+            resolutionCode: 'RESOLVED',
+          }),
+        }),
+      );
+      expect(mockPrisma.responderProfile.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { memberId: 'mem-1' },
+          data: expect.objectContaining({
+            dutyState: 'AVAILABLE',
+          }),
+        }),
+      );
+    });
+  });
 });

@@ -31,13 +31,21 @@ async function bootstrap() {
 
   // CORS
   const configuredOrigin = config.get<string>('CORS_ORIGIN', 'http://localhost:3000');
+  const allowedOrigins = configuredOrigin.split(',').map((o) => o.trim()).filter(Boolean);
+  const localhostRegex = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i;
+
   app.enableCors({
     origin: (origin, cb) => {
-      // Allow requests from localhost frontend or tools without origin header
-      if (!origin || origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      // Allow requests without origin header (mobile apps, server-to-server, curl)
+      if (!origin) {
+        cb(null, true);
+        return;
+      }
+      // Strict boundary check: exact localhost host or configured production origin
+      if (localhostRegex.test(origin) || allowedOrigins.includes(origin)) {
         cb(null, true);
       } else {
-        cb(null, configuredOrigin);
+        cb(new Error(`Origin ${origin} not allowed by CORS policy`), false);
       }
     },
     credentials: true,

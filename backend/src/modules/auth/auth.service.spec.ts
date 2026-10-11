@@ -11,6 +11,7 @@ describe('AuthService (Authentication & Privilege Safety)', () => {
   let mockPrisma: any;
   let mockJwt: any;
   let mockConfig: any;
+  let mockTokenRevocation: any;
 
   beforeEach(() => {
     mockPrisma = {
@@ -22,6 +23,7 @@ describe('AuthService (Authentication & Privilege Safety)', () => {
         create: vi.fn(),
         findUnique: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         deleteMany: vi.fn(),
       },
     };
@@ -36,10 +38,16 @@ describe('AuthService (Authentication & Privilege Safety)', () => {
       }),
     };
 
+    mockTokenRevocation = {
+      revokeUser: vi.fn(),
+      isRevoked: vi.fn().mockReturnValue(false),
+    };
+
     service = new AuthService(
       mockPrisma as PrismaService,
       mockJwt as JwtService,
       mockConfig as ConfigService,
+      mockTokenRevocation as any,
     );
   });
 
@@ -169,6 +177,21 @@ describe('AuthService (Authentication & Privilege Safety)', () => {
       const tokenPayload = mockJwt.sign.mock.calls[0][0];
       expect(tokenPayload.role).toBe('STUDENT');
       expect(tokenPayload.role).not.toBe('CAMPUS_ADMIN');
+    });
+  });
+
+  describe('Logout & Immediate Token Revocation', () => {
+    it('should revoke all active user sessions and register token with revocation service', async () => {
+      const userId = 'user-123';
+      const accessToken = 'active-jwt-token-xyz';
+
+      await service.logout(userId, accessToken);
+
+      expect(mockPrisma.session.updateMany).toHaveBeenCalledWith({
+        where: { userId, revokedAt: null },
+        data: expect.objectContaining({ revokedAt: expect.any(Date) }),
+      });
+      expect(mockTokenRevocation.revokeUser).toHaveBeenCalledWith(userId, accessToken);
     });
   });
 });

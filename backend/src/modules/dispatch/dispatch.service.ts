@@ -269,7 +269,11 @@ export class DispatchService {
       targetId: assignmentId,
     });
 
-    return assignment;
+    const updated = await this.prisma.assignment.findUnique({
+      where: { id: assignmentId },
+    });
+
+    return updated || { ...assignment, status: 'ACCEPTED' };
   }
 
   /**
@@ -308,6 +312,8 @@ export class DispatchService {
       slot_no: assignment.slotNo,
       attempt_no: assignment.attemptNo + 1,
     });
+
+    return { ...assignment, status: 'REJECTED' };
   }
 
   /**
@@ -325,6 +331,344 @@ export class DispatchService {
       },
     });
 
-    // Notify coordinator and admin (handled by notification system)
+    // Notify coordinator and admin
+    const team = await this.prisma.team.findUnique({
+      where: { id: teamId },
+      include: {
+        members: {
+          where: { isCoordinator: true, leftAt: null },
+          select: { userId: true },
+        },
+      },
+    });
+
+    if (team?.members) {
+      for (const m of team.members) {
+        await this.prisma.notification.create({
+          data: {
+            recipientUserId: m.userId,
+            recipientId: m.userId,
+            incidentId,
+            audienceType: 'ACT',
+            channel: 'IN_APP',
+            deliveryStatus: 'DELIVERED',
+            title: `Dispatch Escalation Alert: ${team.code}`,
+            body: `Incident requires coordinator review — all automated dispatch attempts exhausted.`,
+          },
+        }).catch(() => null);
+      }
+    }
+  }
+
+  /**
+   * Process offer timeout for an incident and team.
+   */
+  async processOfferTimeout(incidentId: string, teamId: string) {
+    const expiredOffers = await this.prisma.assignment.findMany({
+      where: {
+        incidentId,
+        teamId,
+        status: 'OFFERED',
+        expiresAt: { lte: new Date() },
+      },
+    });
+
+    for (const offer of expiredOffers) {
+      await this.prisma.assignment.update({
+        where: { id: offer.id },
+        data: { status: 'TIMED_OUT' },
+      });
+
+      await this.auditService.log({
+        eventType: 'STATUS_CHANGED',
+        incidentId,
+        actorKind: 'SYSTEM',
+        targetType: 'assignment',
+        targetId: offer.id,
+        details: { status: 'TIMED_OUT', slotNo: offer.slotNo, attemptNo: offer.attemptNo },
+      });
+
+      // Trigger retry for this slot
+      await this.retryDispatch(incidentId, teamId, offer.slotNo, offer.attemptNo + 1);
+    }
+  }
+
+  /**
+   * Retry dispatch for a slot after rejection or timeout.
+   */
+  async retryDispatch(incidentId: string, teamId: string, slotNo: number, attemptNo: number) {
+    // 1. Check if slot is already filled
+    const existingAccepted = await this.prisma.assignment.findFirst({
+      where: {
+        incidentId,
+        slotNo,
+        status: { in: ['ACCEPTED', 'EN_ROUTE', 'ON_SCENE', 'COMPLETED'] },
+      },
+    });
+    if (existingAccepted) {
+      return { filled: true };
+    }
+
+    // 2. Max attempts check (3 attempts)
+    if (attemptNo > 3) {
+      const team = await this.prisma.team.findUnique({ where: { id: teamId } });
+      await this.escalate(incidentId, teamId, team?.code || 'UNKNOWN');
+      return { escalated: true, reason: 'MAX_ATTEMPTS_EXCEEDED' };
+    }
+
+    // 3. Find candidates who have not been offered this incident yet
+    const priorAssignments = await this.prisma.assignment.findMany({
+      where: { incidentId, teamId },
+      select: { memberId: true },
+    });
+    const priorMemberIds = new Set(priorAssignments.map((a: any) => a.memberId));
+
+    const incident = await this.prisma.incident.findUnique({
+      where: { id: incidentId },
+      select: { workflow: true, isRestricted: true },
+    });
+    const team = await this.prisma.team.findUnique({ where: { id: teamId } });
+    if (!team) return { error: 'TEAM_NOT_FOUND' };
+
+    const allowBusy = incident?.workflow === 'EMERGENCY_SOS' && team.allowBusyOverrideForSos;
+    const candidates = await this.getEligibleCandidates(teamId, incidentId, allowBusy);
+    const nextCandidate = candidates.find((c: any) => !priorMemberIds.has(c.id));
+
+    if (!nextCandidate) {
+      await this.escalate(incidentId, teamId, team.code);
+      return { escalated: true, reason: 'NO_REMAINING_CANDIDATES' };
+    }
+
+    const timeout = incident?.workflow === 'EMERGENCY_SOS'
+      ? team.offerTimeoutSosSeconds
+      : team.offerTimeoutStandardSeconds;
+
+    await this.offerToResponder(incidentId, teamId, nextCandidate.id, timeout, attemptNo, slotNo);
+
+    await this.dispatchQueue.add('check-offer-timeout', {
+      incident_id: incidentId,
+      team_id: teamId,
+    }, {
+      delay: timeout * 1000,
+      attempts: 1,
+    });
+
+    return { offered: true, candidateId: nextCandidate.id };
+  }
+
+  /**
+   * Query active offers for a given responder user.
+   */
+  async getOffersForUser(userId: string) {
+    const memberships = await this.prisma.teamMember.findMany({
+      where: { userId, leftAt: null },
+      select: { id: true, teamId: true },
+    });
+    const memberIds = memberships.map((m: any) => m.id);
+    if (memberIds.length === 0) return [];
+
+    return this.prisma.assignment.findMany({
+      where: {
+        memberId: { in: memberIds },
+        status: 'OFFERED',
+      },
+      include: {
+        incident: {
+          select: {
+            id: true,
+            publicId: true,
+            workflow: true,
+            description: true,
+            status: true,
+            finalCategory: true,
+            confirmedAt: true,
+          },
+        },
+        team: {
+          select: { id: true, code: true, name: true },
+        },
+      },
+      orderBy: { offeredAt: 'desc' },
+    });
+  }
+
+  /**
+   * Mark assignment en-route.
+   */
+  async markEnRoute(assignmentId: string, responderUserId: string) {
+    const assignment = await this.prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      include: { member: true },
+    });
+    if (!assignment) {
+      throw new ConflictException({ code: 'NOT_FOUND', message: 'Assignment not found' });
+    }
+    if (assignment.member && assignment.member.userId !== responderUserId) {
+      throw new ConflictException({ code: 'FORBIDDEN', message: 'Not authorized for this assignment' });
+    }
+    if (assignment.status !== 'ACCEPTED') {
+      throw new ConflictException({
+        code: 'INVALID_STATUS',
+        message: `Cannot transition assignment from ${assignment.status} to EN_ROUTE`,
+      });
+    }
+
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.assignment.update({
+        where: { id: assignmentId },
+        data: { status: 'EN_ROUTE' },
+      });
+      await tx.incident.update({
+        where: { id: assignment.incidentId },
+        data: { status: 'RESPONDER_ON_THE_WAY' },
+      });
+      await tx.incidentStatusHistory.create({
+        data: {
+          incidentId: assignment.incidentId,
+          fromStatus: 'RESPONDER_ASSIGNED',
+          toStatus: 'RESPONDER_ON_THE_WAY',
+          changedBy: responderUserId,
+          note: 'Responder marked EN_ROUTE',
+        },
+      });
+    });
+
+    await this.auditService.log({
+      eventType: 'STATUS_CHANGED',
+      incidentId: assignment.incidentId,
+      actorUserId: responderUserId,
+      actorKind: 'USER',
+      targetType: 'assignment',
+      targetId: assignmentId,
+      details: { status: 'EN_ROUTE' },
+    });
+
+    return { status: 'EN_ROUTE', assignment_id: assignmentId };
+  }
+
+  /**
+   * Mark assignment on-scene.
+   */
+  async markOnScene(assignmentId: string, responderUserId: string) {
+    const assignment = await this.prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      include: { member: true },
+    });
+    if (!assignment) {
+      throw new ConflictException({ code: 'NOT_FOUND', message: 'Assignment not found' });
+    }
+    if (assignment.member && assignment.member.userId !== responderUserId) {
+      throw new ConflictException({ code: 'FORBIDDEN', message: 'Not authorized for this assignment' });
+    }
+    if (assignment.status !== 'EN_ROUTE' && assignment.status !== 'ACCEPTED') {
+      throw new ConflictException({
+        code: 'INVALID_STATUS',
+        message: `Cannot transition assignment from ${assignment.status} to ON_SCENE`,
+      });
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.assignment.update({
+        where: { id: assignmentId },
+        data: { status: 'ON_SCENE' },
+      });
+      await tx.incident.update({
+        where: { id: assignment.incidentId },
+        data: {
+          status: 'RESPONDER_AT_LOCATION',
+          responderArrivedAt: now,
+        },
+      });
+      await tx.incidentStatusHistory.create({
+        data: {
+          incidentId: assignment.incidentId,
+          fromStatus: 'RESPONDER_ON_THE_WAY',
+          toStatus: 'RESPONDER_AT_LOCATION',
+          changedBy: responderUserId,
+          note: 'Responder marked ON_SCENE',
+        },
+      });
+    });
+
+    await this.auditService.log({
+      eventType: 'STATUS_CHANGED',
+      incidentId: assignment.incidentId,
+      actorUserId: responderUserId,
+      actorKind: 'USER',
+      targetType: 'assignment',
+      targetId: assignmentId,
+      details: { status: 'ON_SCENE' },
+    });
+
+    return { status: 'ON_SCENE', assignment_id: assignmentId };
+  }
+
+  /**
+   * Mark assignment completed and resolve incident.
+   */
+  async completeAssignment(
+    assignmentId: string,
+    responderUserId: string,
+    resolutionSummary: string,
+    resolutionCode: string = 'RESOLVED',
+  ) {
+    const assignment = await this.prisma.assignment.findUnique({
+      where: { id: assignmentId },
+      include: { member: true },
+    });
+    if (!assignment) {
+      throw new ConflictException({ code: 'NOT_FOUND', message: 'Assignment not found' });
+    }
+    if (assignment.member && assignment.member.userId !== responderUserId) {
+      throw new ConflictException({ code: 'FORBIDDEN', message: 'Not authorized for this assignment' });
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction(async (tx: any) => {
+      await tx.assignment.update({
+        where: { id: assignmentId },
+        data: { status: 'COMPLETED' },
+      });
+      await tx.responderProfile.update({
+        where: { memberId: assignment.memberId },
+        data: {
+          dutyState: 'AVAILABLE',
+          dutyStateChangedAt: now,
+          changeReason: 'COMPLETION',
+          currentAssignmentCount: { decrement: 1 },
+        },
+      });
+      await tx.incident.update({
+        where: { id: assignment.incidentId },
+        data: {
+          status: 'RESOLVED',
+          resolvedAt: now,
+          resolutionSummary,
+          resolutionCode,
+        },
+      });
+      await tx.incidentStatusHistory.create({
+        data: {
+          incidentId: assignment.incidentId,
+          fromStatus: 'RESPONDER_AT_LOCATION',
+          toStatus: 'RESOLVED',
+          changedBy: responderUserId,
+          note: resolutionSummary,
+        },
+      });
+    });
+
+    await this.auditService.log({
+      eventType: 'RESOLVED',
+      incidentId: assignment.incidentId,
+      actorUserId: responderUserId,
+      actorKind: 'USER',
+      targetType: 'assignment',
+      targetId: assignmentId,
+      details: { resolution_summary: resolutionSummary, resolution_code: resolutionCode },
+    });
+
+    return { status: 'COMPLETED', incident_id: assignment.incidentId };
   }
 }

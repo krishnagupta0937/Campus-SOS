@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Delete, Patch, Body, Param, Headers, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Get, Delete, Patch, Body, Param, Headers, HttpCode, HttpStatus, BadRequestException } from '@nestjs/common';
 import { IncidentsService } from './incidents.service';
 import { AiService } from '../ai/ai.service';
 import { Roles, CurrentUser, IdempotencyRequired } from '../../common/decorators';
@@ -32,8 +32,7 @@ export class SosController {
     @CurrentUser() user: AuthUser,
     @Body() body: any,
   ) {
-    // Update draft payload
-    return { updated: true };
+    return this.incidentsService.updateDraft(draftId, user.id, body);
   }
 
   @Post('drafts/:id/preview')
@@ -98,17 +97,18 @@ export class SosController {
     @Headers('idempotency-key') idempotencyKey: string,
   ) {
     if (!idempotencyKey) {
-      return {
-        error: { code: 'VALIDATION_FAILED', message: 'Idempotency-Key header is required' },
-      };
+      throw new BadRequestException({
+        code: 'VALIDATION_FAILED',
+        message: 'Idempotency-Key header is required',
+      });
     }
     return this.incidentsService.confirmSosDraft(draftId, user.id, idempotencyKey);
   }
 
   @Delete('drafts/:id')
   @Roles('STUDENT')
-  async deleteDraft(@Param('id') draftId: string) {
-    return { deleted: true };
+  async deleteDraft(@Param('id') draftId: string, @CurrentUser() user: AuthUser) {
+    return this.incidentsService.deleteDraft(draftId, user.id);
   }
 
   @Get(':incidentId/live')

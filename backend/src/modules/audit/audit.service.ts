@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { computeAuditHash, verifyAuditChain } from '../../common/utils/crypto.utils';
 import { PrismaClient } from '@prisma/client';
+import { AuthUser } from '../../common/guards/jwt-auth.guard';
 
 @Injectable()
 export class AuditService {
@@ -92,7 +93,36 @@ export class AuditService {
   /**
    * Get audit events for an incident.
    */
-  async getIncidentAudit(incidentId: string) {
+  async getIncidentAudit(incidentId: string, user?: AuthUser) {
+    if (user && user.role !== 'CAMPUS_ADMIN') {
+      const incident = await this.prisma.incident.findUnique({
+        where: { id: incidentId },
+        include: {
+          incidentTeams: { select: { teamId: true } },
+          assignments: {
+            where: { member: { userId: user.id } },
+            select: { id: true },
+          },
+        },
+      });
+
+      if (!incident) {
+        throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
+      }
+
+      const isReporter = incident.reporterId === user.id;
+      const isAssigned = (incident.assignments || []).length > 0;
+      const userTeamIds = user.teamMemberships?.map(tm => tm.teamId) || [];
+      const isInTeam = (incident.incidentTeams || []).some(it => userTeamIds.includes(it.teamId));
+
+      if (!isReporter && !isAssigned && !isInTeam) {
+        throw new ForbiddenException({
+          code: 'FORBIDDEN',
+          message: 'Insufficient permissions to view incident timeline',
+        });
+      }
+    }
+
     return this.prisma.auditEvent.findMany({
       where: { incidentId },
       orderBy: { occurredAt: 'asc' },

@@ -8,6 +8,8 @@ import { AccessPolicyService } from '../access-policy/access-policy.service';
 import { v4 as uuidv4 } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
+import sharp from 'sharp';
 
 /**
  * Attachments service for photo evidence management.
@@ -161,13 +163,82 @@ export class AttachmentsService {
   }
 
   /**
+   * Validate magic bytes against allowed image formats (JPEG, PNG, WebP).
+   */
+  validateMagicBytes(buffer: Buffer): 'image/jpeg' | 'image/png' | 'image/webp' | null {
+    if (!buffer || buffer.length < 12) return null;
+
+    // JPEG: FF D8 FF
+    if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+      return 'image/jpeg';
+    }
+
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47 &&
+      buffer[4] === 0x0d &&
+      buffer[5] === 0x0a &&
+      buffer[6] === 0x1a &&
+      buffer[7] === 0x0a
+    ) {
+      return 'image/png';
+    }
+
+    // WebP: RIFF (bytes 0..3) ... WEBP (bytes 8..11)
+    if (
+      buffer[0] === 0x52 &&
+      buffer[1] === 0x49 &&
+      buffer[2] === 0x46 &&
+      buffer[3] === 0x46 &&
+      buffer[8] === 0x57 &&
+      buffer[9] === 0x45 &&
+      buffer[10] === 0x42 &&
+      buffer[11] === 0x50
+    ) {
+      return 'image/webp';
+    }
+
+    return null;
+  }
+
+  /**
+   * Sanitize image buffer by stripping EXIF metadata, normalizing orientation,
+   * and extracting dimensions and SHA-256 hash.
+   */
+  async sanitizeImage(buffer: Buffer, mimeType: 'image/jpeg' | 'image/png' | 'image/webp') {
+    let pipeline = sharp(buffer).rotate();
+    if (mimeType === 'image/jpeg') {
+      pipeline = pipeline.jpeg({ quality: 85 });
+    } else if (mimeType === 'image/png') {
+      pipeline = pipeline.png({ compressionLevel: 8 });
+    } else if (mimeType === 'image/webp') {
+      pipeline = pipeline.webp({ quality: 85 });
+    }
+
+    const cleanBuffer = await pipeline.toBuffer();
+    const meta = await sharp(cleanBuffer).metadata();
+    const sha256 = crypto.createHash('sha256').update(cleanBuffer).digest('hex');
+
+    return {
+      cleanBuffer,
+      sha256,
+      widthPx: meta.width ?? null,
+      heightPx: meta.height ?? null,
+      sizeBytes: cleanBuffer.length,
+    };
+  }
+
+  /**
    * Handle direct file upload (dev / local storage fallback).
    */
   async handleDirectUpload(
     attachmentId: string,
     uploaderId: string,
     buffer: Buffer,
-    mimeType: string,
+    claimedMimeType?: string,
   ) {
     const attachment = await this.prisma.attachment.findUnique({
       where: { id: attachmentId },
@@ -187,16 +258,6 @@ export class AttachmentsService {
       });
     }
 
-    if (!this.allowedMimeTypes.has(mimeType)) {
-      throw new HttpException(
-        {
-          code: 'UNSUPPORTED_MEDIA_TYPE',
-          message: `Unsupported file type: ${mimeType}. Allowed: JPEG, PNG, WebP`,
-        },
-        HttpStatus.UNSUPPORTED_MEDIA_TYPE,
-      );
-    }
-
     if (buffer.length > this.maxSizeBytes) {
       throw new HttpException(
         { code: 'FILE_TOO_LARGE', message: 'File too large. Maximum 10 MB.' },
@@ -204,7 +265,38 @@ export class AttachmentsService {
       );
     }
 
-    const ext = mimeType.split('/')[1] || 'jpg';
+    // 1. Validate real file content magic bytes
+    const detectedMime = this.validateMagicBytes(buffer);
+    if (!detectedMime) {
+      throw new HttpException(
+        {
+          code: 'UNSUPPORTED_MEDIA_TYPE',
+          message: 'File content does not match allowed image signatures (JPEG, PNG, WebP)',
+          details: [{ field: 'file', issue: 'INVALID_MAGIC_BYTES' }],
+        },
+        HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+      );
+    }
+
+    // 2. Strip EXIF and sanitize
+    let sanitized: {
+      cleanBuffer: Buffer;
+      sha256: string;
+      widthPx: number | null;
+      heightPx: number | null;
+      sizeBytes: number;
+    };
+
+    try {
+      sanitized = await this.sanitizeImage(buffer, detectedMime);
+    } catch {
+      throw new BadRequestException({
+        code: 'CORRUPTED_IMAGE',
+        message: 'Unable to decode or sanitize image payload',
+      });
+    }
+
+    const ext = detectedMime.split('/')[1] || 'jpg';
     const uploadDirs = [
       path.resolve(__dirname, '../../../../uploads'),
       path.resolve(__dirname, '../../../../frontend/public/uploads'),
@@ -214,18 +306,28 @@ export class AttachmentsService {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(path.join(dir, `${attachmentId}.${ext}`), buffer);
+      fs.writeFileSync(path.join(dir, `${attachmentId}.${ext}`), sanitized.cleanBuffer);
     }
 
     await this.prisma.attachment.update({
       where: { id: attachmentId },
-      data: { scanStatus: 'CLEAN' },
+      data: {
+        scanStatus: 'CLEAN',
+        sha256: sanitized.sha256,
+        widthPx: sanitized.widthPx,
+        heightPx: sanitized.heightPx,
+        sizeBytes: sanitized.sizeBytes,
+        mimeType: detectedMime,
+      },
     });
 
     return {
       attachment_id: attachmentId,
       status: 'CLEAN',
       url: `/uploads/${attachmentId}.${ext}`,
+      sha256: sanitized.sha256,
+      width_px: sanitized.widthPx,
+      height_px: sanitized.heightPx,
     };
   }
 
@@ -252,14 +354,111 @@ export class AttachmentsService {
       });
     }
 
-    // Mark as uploaded (EXIF stripping would happen here in production via sharp)
-    // In production, fetch from S3, process with sharp, re-upload stripped version
+    // Locate stored file on disk or in S3
+    let buffer: Buffer | null = null;
+    const possiblePaths = [
+      path.resolve(__dirname, `../../../../uploads/${attachmentId}.jpg`),
+      path.resolve(__dirname, `../../../../uploads/${attachmentId}.jpeg`),
+      path.resolve(__dirname, `../../../../uploads/${attachmentId}.png`),
+      path.resolve(__dirname, `../../../../uploads/${attachmentId}.webp`),
+      path.resolve(__dirname, `../../../../frontend/public/uploads/${attachmentId}.jpg`),
+      path.resolve(__dirname, `../../../../frontend/public/uploads/${attachmentId}.jpeg`),
+      path.resolve(__dirname, `../../../../frontend/public/uploads/${attachmentId}.png`),
+      path.resolve(__dirname, `../../../../frontend/public/uploads/${attachmentId}.webp`),
+    ];
+
+    for (const p of possiblePaths) {
+      if (fs.existsSync(p)) {
+        buffer = fs.readFileSync(p);
+        break;
+      }
+    }
+
+    if (!buffer) {
+      try {
+        const getCmd = new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: attachment.storageKey,
+        });
+        const res = await this.s3.send(getCmd);
+        if (res.Body) {
+          const chunks: any[] = [];
+          for await (const chunk of res.Body as any) chunks.push(chunk);
+          buffer = Buffer.concat(chunks);
+        }
+      } catch {
+        // S3 fetch skipped
+      }
+    }
+
+    let sha256 = attachment.sha256;
+    let widthPx = attachment.widthPx;
+    let heightPx = attachment.heightPx;
+    let detectedMime = attachment.mimeType as 'image/jpeg' | 'image/png' | 'image/webp';
+
+    if (buffer) {
+      const detected = this.validateMagicBytes(buffer);
+      if (!detected) {
+        throw new HttpException(
+          {
+            code: 'UNSUPPORTED_MEDIA_TYPE',
+            message: 'File content does not match allowed image signatures (JPEG, PNG, WebP)',
+          },
+          HttpStatus.UNSUPPORTED_MEDIA_TYPE,
+        );
+      }
+      detectedMime = detected;
+
+      try {
+        const sanitized = await this.sanitizeImage(buffer, detectedMime);
+        sha256 = sanitized.sha256;
+        widthPx = sanitized.widthPx;
+        heightPx = sanitized.heightPx;
+
+        // Re-write sanitized buffer back to disk
+        const ext = detectedMime.split('/')[1] || 'jpg';
+        const uploadDirs = [
+          path.resolve(__dirname, '../../../../uploads'),
+          path.resolve(__dirname, '../../../../frontend/public/uploads'),
+        ];
+        for (const dir of uploadDirs) {
+          if (fs.existsSync(dir)) {
+            fs.writeFileSync(path.join(dir, `${attachmentId}.${ext}`), sanitized.cleanBuffer);
+          }
+        }
+      } catch {
+        throw new BadRequestException({
+          code: 'CORRUPTED_IMAGE',
+          message: 'Unable to decode or sanitize image payload',
+        });
+      }
+    } else if (attachment.scanStatus === 'CLEAN') {
+      return { attachment_id: attachmentId, status: 'CLEAN' };
+    } else {
+      throw new BadRequestException({
+        code: 'FILE_NOT_FOUND',
+        message: 'No uploaded file content found for verification',
+      });
+    }
+
     await this.prisma.attachment.update({
       where: { id: attachmentId },
-      data: { scanStatus: 'CLEAN' },
+      data: {
+        scanStatus: 'CLEAN',
+        sha256,
+        widthPx,
+        heightPx,
+        mimeType: detectedMime,
+      },
     });
 
-    return { attachment_id: attachmentId, status: 'CLEAN' };
+    return {
+      attachment_id: attachmentId,
+      status: 'CLEAN',
+      sha256,
+      width_px: widthPx,
+      height_px: heightPx,
+    };
   }
 
   /**

@@ -170,4 +170,71 @@ describe('AttachmentsService (Photo Security & 2-Photo Enforcement)', () => {
       );
     });
   });
+
+  describe('File Content Security & EXIF Stripping', () => {
+    it('should identify valid JPEG, PNG, WebP magic bytes and reject malicious/spoofed files', () => {
+      const jpegBuffer = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
+      const pngBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d]);
+      const webpBuffer = Buffer.from([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50]);
+      const maliciousScript = Buffer.from('<script>alert("xss")</script>');
+
+      expect(service.validateMagicBytes(jpegBuffer)).toBe('image/jpeg');
+      expect(service.validateMagicBytes(pngBuffer)).toBe('image/png');
+      expect(service.validateMagicBytes(webpBuffer)).toBe('image/webp');
+      expect(service.validateMagicBytes(maliciousScript)).toBeNull();
+    });
+
+    it('should reject direct upload if buffer magic bytes do not match an image signature', async () => {
+      mockPrisma.attachment.findUnique.mockResolvedValue({
+        id: 'att-xss',
+        uploaderId: 'user-1',
+        mimeType: 'image/jpeg',
+      });
+
+      const fakeImage = Buffer.from('GIF89a; not a jpeg, but an invalid executable script');
+
+      await expect(
+        service.handleDirectUpload('att-xss', 'user-1', fakeImage, 'image/jpeg'),
+      ).rejects.toThrow(HttpException);
+    });
+
+    it('should sanitize valid image buffer, compute sha256 hash and dimensions, and update scanStatus to CLEAN', async () => {
+      const sharp = (await import('sharp')).default;
+      const validPng = await sharp({
+        create: {
+          width: 10,
+          height: 10,
+          channels: 3,
+          background: { r: 255, g: 0, b: 0 },
+        },
+      })
+        .png()
+        .toBuffer();
+
+      mockPrisma.attachment.findUnique.mockResolvedValue({
+        id: 'att-valid',
+        uploaderId: 'user-1',
+        mimeType: 'image/png',
+      });
+      mockPrisma.attachment.update.mockResolvedValue({});
+
+      const result = await service.handleDirectUpload('att-valid', 'user-1', validPng, 'image/png');
+
+      expect(result.status).toBe('CLEAN');
+      expect(result.sha256).toBeDefined();
+      expect(result.width_px).toBe(10);
+      expect(result.height_px).toBe(10);
+      expect(mockPrisma.attachment.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'att-valid' },
+          data: expect.objectContaining({
+            scanStatus: 'CLEAN',
+            sha256: expect.any(String),
+            widthPx: 10,
+            heightPx: 10,
+          }),
+        }),
+      );
+    });
+  });
 });

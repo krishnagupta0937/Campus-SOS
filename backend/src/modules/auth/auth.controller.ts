@@ -25,8 +25,10 @@ export class AuthController {
 
   @Post('logout')
   @HttpCode(HttpStatus.OK)
-  async logout(@CurrentUser('id') userId: string) {
-    await this.authService.logout(userId);
+  async logout(@CurrentUser('id') userId: string, @Req() req: any) {
+    const authHeader = req?.headers?.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+    await this.authService.logout(userId, token);
     return { message: 'Logged out successfully' };
   }
 

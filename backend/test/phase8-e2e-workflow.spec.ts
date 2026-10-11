@@ -73,12 +73,13 @@ describe('Campus SOS — Phase 8 End-to-End Verification Suite', () => {
     }).then((r) => r.json());
     expect(u1.attachment_id).toBeDefined();
 
-    // Direct upload
+    // Direct upload with valid PNG bytes
+    const VALID_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
     const uploadRes = await fetch(`${BASE_URL}/attachments/${u1.attachment_id}/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${studentToken}` },
       body: JSON.stringify({
-        data_base64: Buffer.from('TEST-PNG-IMAGE-PAYLOAD').toString('base64'),
+        data_base64: VALID_PNG_BASE64,
         mime_type: 'image/png',
       }),
     });
@@ -107,6 +108,8 @@ describe('Campus SOS — Phase 8 End-to-End Verification Suite', () => {
 
   // Scenario 3: A student submits an incident with two photos
   it('3. Student submits incident with two photos', async () => {
+    const VALID_JPEG_BASE64 = '/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////wgALCAABAAEBAREA/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPxA=';
+
     const u1 = await fetch(`${BASE_URL}/attachments/uploads`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${studentToken}` },
@@ -122,13 +125,13 @@ describe('Campus SOS — Phase 8 End-to-End Verification Suite', () => {
     await fetch(`${BASE_URL}/attachments/${u1.attachment_id}/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${studentToken}` },
-      body: JSON.stringify({ data_base64: Buffer.from('IMG-1').toString('base64'), mime_type: 'image/jpeg' }),
+      body: JSON.stringify({ data_base64: VALID_JPEG_BASE64, mime_type: 'image/jpeg' }),
     });
 
     await fetch(`${BASE_URL}/attachments/${u2.attachment_id}/upload`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${studentToken}` },
-      body: JSON.stringify({ data_base64: Buffer.from('IMG-2').toString('base64'), mime_type: 'image/jpeg' }),
+      body: JSON.stringify({ data_base64: VALID_JPEG_BASE64, mime_type: 'image/jpeg' }),
     });
 
     const res = await fetch(`${BASE_URL}/incidents`, {

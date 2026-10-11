@@ -117,83 +117,113 @@ export class IncidentsService {
     const count = await this.prisma.incident.count({ where: { workflow: 'EMERGENCY_SOS' } });
     const publicId = generatePublicId('EMERGENCY_SOS', count + 1);
 
-    // Atomic transaction: incident + location + outbox + audit
-    const result = await this.prisma.$transaction(async (tx: any) => {
-      const incident = await tx.incident.create({
-        data: {
-          publicId,
-          workflow: 'EMERGENCY_SOS',
-          reporterId,
-          createdById: reporterId,
-          description: payload.description,
-          studentCategory: null, // SOS never has student category
-          status: 'CREATED',
-          confirmedAt: new Date(),
-          idempotencyKey,
-        },
-      });
-
-      // Create location if provided
-      if (payload.pin || payload.location) {
-        await tx.incidentLocation.create({
+    // Atomic transaction: incident + location + outbox + audit + draft deletion
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(async (tx: any) => {
+        const incident = await tx.incident.create({
           data: {
-            incidentId: incident.id,
-            mapId: null,
-            predefinedLocationId: payload.location?.predefined_location_id || null,
-            locationKind: payload.location?.kind || null,
-            locationText: payload.location?.text || null,
-            pinX: payload.pin?.x || null,
-            pinY: payload.pin?.y || null,
+            publicId,
+            workflow: 'EMERGENCY_SOS',
+            reporterId,
+            createdById: reporterId,
+            description: payload.description,
+            studentCategory: null, // SOS never has student category
+            status: 'CREATED',
+            confirmedAt: new Date(),
+            idempotencyKey,
           },
         });
-      }
 
-      // Link attachments if any
-      if (payload.attachment_ids && payload.attachment_ids.length > 0) {
-        if (payload.attachment_ids.length > 2) {
-          throw new HttpException(
-            { code: 'PHOTO_LIMIT_EXCEEDED', message: 'Maximum 2 photos allowed' },
-            HttpStatus.UNPROCESSABLE_ENTITY,
-          );
-        }
-
-        for (let i = 0; i < payload.attachment_ids.length; i++) {
-          await tx.attachment.update({
-            where: { id: payload.attachment_ids[i] },
+        // Create location if provided
+        if (payload.pin || payload.location) {
+          await tx.incidentLocation.create({
             data: {
               incidentId: incident.id,
-              draftId: null,
-              position: i + 1,
+              mapId: null,
+              predefinedLocationId: payload.location?.predefined_location_id || null,
+              locationKind: payload.location?.kind || null,
+              locationText: payload.location?.text || null,
+              pinX: payload.pin?.x || null,
+              pinY: payload.pin?.y || null,
             },
           });
         }
-      }
 
-      // Outbox event: guaranteed delivery to worker
-      await tx.outboxEvent.create({
-        data: {
-          eventType: 'incident.created',
-          aggregateId: incident.id,
-          payload: {
-            incident_id: incident.id,
-            workflow: 'EMERGENCY_SOS',
-            public_id: publicId,
-            reporter_id: reporterId,
+        // Link attachments if any
+        if (payload.attachment_ids && payload.attachment_ids.length > 0) {
+          if (payload.attachment_ids.length > 2) {
+            throw new HttpException(
+              { code: 'PHOTO_LIMIT_EXCEEDED', message: 'Maximum 2 photos allowed' },
+              HttpStatus.UNPROCESSABLE_ENTITY,
+            );
+          }
+
+          for (let i = 0; i < payload.attachment_ids.length; i++) {
+            await tx.attachment.update({
+              where: { id: payload.attachment_ids[i] },
+              data: {
+                incidentId: incident.id,
+                draftId: null,
+                position: i + 1,
+              },
+            });
+          }
+        }
+
+        // Outbox event: guaranteed delivery to worker
+        await tx.outboxEvent.create({
+          data: {
+            eventType: 'incident.created',
+            aggregateId: incident.id,
+            payload: {
+              incident_id: incident.id,
+              workflow: 'EMERGENCY_SOS',
+              public_id: publicId,
+              reporter_id: reporterId,
+            },
           },
-        },
-      });
+        });
 
-      // Audit: SOS_CONFIRMED
-      await this.auditService.logWithTransaction(tx, {
-        eventType: 'SOS_CONFIRMED',
-        incidentId: incident.id,
-        actorUserId: reporterId,
-        actorKind: 'USER',
-        details: { public_id: publicId, workflow: 'EMERGENCY_SOS' },
-      });
+        // Audit: SOS_CONFIRMED
+        await this.auditService.logWithTransaction(tx, {
+          eventType: 'SOS_CONFIRMED',
+          incidentId: incident.id,
+          actorUserId: reporterId,
+          actorKind: 'USER',
+          details: { public_id: publicId, workflow: 'EMERGENCY_SOS' },
+        });
 
-      return incident;
-    });
+        // Delete draft atomically inside transaction to prevent duplicate confirmations
+        await tx.incidentDraft.delete({ where: { id: draftId } });
+
+        return incident;
+      });
+    } catch (err: any) {
+      // Concurrency check: If another concurrent transaction created with this idempotency key
+      if (
+        err?.code === 'P2002' ||
+        err?.message?.includes('idempotency_key') ||
+        err?.message?.includes('idempotencyKey')
+      ) {
+        const replayed = await this.prisma.incident.findUnique({
+          where: { idempotencyKey },
+        });
+        if (replayed) {
+          return {
+            incident: {
+              id: replayed.id,
+              public_id: replayed.publicId,
+              status: replayed.status,
+              workflow: replayed.workflow,
+            },
+            live_channel: `incident:${replayed.id}`,
+            idempotency_replay: true,
+          };
+        }
+      }
+      throw err;
+    }
 
     // Enqueue for background processing (non-blocking)
     try {
@@ -208,9 +238,6 @@ export class IncidentsService {
     } catch {
       // Queue failure doesn't block confirmation — watchdog will pick it up
     }
-
-    // Delete draft
-    await this.prisma.incidentDraft.delete({ where: { id: draftId } }).catch(() => {});
 
     return {
       incident: {
@@ -297,112 +324,137 @@ export class IncidentsService {
     const primaryTeamCode = categoryToTeamCode[data.category] || 'CAMPUS_ADMIN';
     const isRestricted = ['WOMEN_HARASSMENT', 'MEN_HARASSMENT', 'FACULTY_STAFF_MISCONDUCT'].includes(data.category);
 
-    const result = await this.prisma.$transaction(async (tx: any) => {
-      const incident = await tx.incident.create({
-        data: {
-          publicId,
-          workflow: 'STANDARD_REPORT',
-          reporterId,
-          createdById: reporterId,
-          description: data.description,
-          studentCategory: data.category,
-          finalCategory: data.category,
-          status: 'TEAMS_NOTIFIED',
-          isRestricted,
-          firstTeamNotifiedAt: new Date(),
-          idempotencyKey,
-        },
-      });
+    let result: any;
+    try {
+      result = await this.prisma.$transaction(async (tx: any) => {
+        const incident = await tx.incident.create({
+          data: {
+            publicId,
+            workflow: 'STANDARD_REPORT',
+            reporterId,
+            createdById: reporterId,
+            description: data.description,
+            studentCategory: data.category,
+            finalCategory: data.category,
+            status: 'TEAMS_NOTIFIED',
+            isRestricted,
+            firstTeamNotifiedAt: new Date(),
+            idempotencyKey,
+          },
+        });
 
-      // Location is required for standard reports
-      await tx.incidentLocation.create({
-        data: {
-          incidentId: incident.id,
-          predefinedLocationId: data.location?.predefined_location_id || null,
-          locationKind: data.location?.kind as any || null,
-          locationText: data.location?.text || null,
-          pinX: data.pin.x,
-          pinY: data.pin.y,
-        },
-      });
+        // Location is required for standard reports
+        await tx.incidentLocation.create({
+          data: {
+            incidentId: incident.id,
+            predefinedLocationId: data.location?.predefined_location_id || null,
+            locationKind: data.location?.kind as any || null,
+            locationText: data.location?.text || null,
+            pinX: data.pin.x,
+            pinY: data.pin.y,
+          },
+        });
 
-      // Attachments
-      if (data.attachment_ids && data.attachment_ids.length > 0) {
-        if (data.attachment_ids.length > 2) {
-          throw new HttpException(
-            { code: 'PHOTO_LIMIT_EXCEEDED', message: 'Maximum 2 photos allowed' },
-            HttpStatus.UNPROCESSABLE_ENTITY,
-          );
-        }
-        for (let i = 0; i < data.attachment_ids.length; i++) {
-          await tx.attachment.update({
-            where: { id: data.attachment_ids[i] },
-            data: { incidentId: incident.id, position: i + 1 },
-          });
-        }
-      }
-
-      // Link assigned teams and generate notifications
-      const teamCodes = Array.from(new Set([primaryTeamCode, 'CAMPUS_ADMIN']));
-      for (const tCode of teamCodes) {
-        const team = await tx.team.findFirst({ where: { code: tCode } });
-        if (team) {
-          await tx.incidentTeam.create({
-            data: {
-              incidentId: incident.id,
-              teamId: team.id,
-              role: tCode === primaryTeamCode ? 'ACT' : 'KNOW',
-            },
-          }).catch(() => null);
-
-          // Deliver in-app notification to team members
-          const members = await tx.teamMember.findMany({
-            where: { teamId: team.id, leftAt: null },
-          });
-          for (const m of members) {
-            await tx.notification.create({
-              data: {
-                recipientUserId: m.userId,
-                recipientId: m.userId,
-                incidentId: incident.id,
-                audienceType: 'RESPONDER',
-                channel: 'IN_APP',
-                deliveryStatus: 'DELIVERED',
-                title: `New Incident Assigned: ${publicId}`,
-                body: `${data.description.substring(0, 100)}`,
-              },
-            }).catch(() => null);
+        // Attachments
+        if (data.attachment_ids && data.attachment_ids.length > 0) {
+          if (data.attachment_ids.length > 2) {
+            throw new HttpException(
+              { code: 'PHOTO_LIMIT_EXCEEDED', message: 'Maximum 2 photos allowed' },
+              HttpStatus.UNPROCESSABLE_ENTITY,
+            );
+          }
+          for (let i = 0; i < data.attachment_ids.length; i++) {
+            await tx.attachment.update({
+              where: { id: data.attachment_ids[i] },
+              data: { incidentId: incident.id, position: i + 1 },
+            });
           }
         }
-      }
 
-      // Outbox event
-      await tx.outboxEvent.create({
-        data: {
-          eventType: 'incident.created',
-          aggregateId: incident.id,
-          payload: {
-            incident_id: incident.id,
-            workflow: 'STANDARD_REPORT',
-            public_id: publicId,
-            reporter_id: reporterId,
-            student_category: data.category,
-            routed_teams: teamCodes,
+        // Link assigned teams and generate notifications
+        const teamCodes = Array.from(new Set([primaryTeamCode, 'CAMPUS_ADMIN']));
+        for (const tCode of teamCodes) {
+          const team = await tx.team.findFirst({ where: { code: tCode } });
+          if (team) {
+            await tx.incidentTeam.create({
+              data: {
+                incidentId: incident.id,
+                teamId: team.id,
+                role: tCode === primaryTeamCode ? 'ACT' : 'KNOW',
+              },
+            }).catch(() => null);
+
+            // Deliver in-app notification to team members
+            const members = await tx.teamMember.findMany({
+              where: { teamId: team.id, leftAt: null },
+            });
+            for (const m of members) {
+              await tx.notification.create({
+                data: {
+                  recipientUserId: m.userId,
+                  recipientId: m.userId,
+                  incidentId: incident.id,
+                  audienceType: 'RESPONDER',
+                  channel: 'IN_APP',
+                  deliveryStatus: 'DELIVERED',
+                  title: `New Incident Assigned: ${publicId}`,
+                  body: `${data.description.substring(0, 100)}`,
+                },
+              }).catch(() => null);
+            }
+          }
+        }
+
+        // Outbox event
+        await tx.outboxEvent.create({
+          data: {
+            eventType: 'incident.created',
+            aggregateId: incident.id,
+            payload: {
+              incident_id: incident.id,
+              workflow: 'STANDARD_REPORT',
+              public_id: publicId,
+              reporter_id: reporterId,
+              student_category: data.category,
+              routed_teams: teamCodes,
+            },
           },
-        },
-      });
+        });
 
-      // Audit
-      await this.auditService.logWithTransaction(tx, {
-        eventType: 'INCIDENT_CREATED',
-        incidentId: incident.id,
-        actorUserId: reporterId,
-        actorKind: 'USER',
-        details: { public_id: publicId, workflow: 'STANDARD_REPORT', category: data.category },
-      });
+        // Audit
+        await this.auditService.logWithTransaction(tx, {
+          eventType: 'INCIDENT_CREATED',
+          incidentId: incident.id,
+          actorUserId: reporterId,
+          actorKind: 'USER',
+          details: { public_id: publicId, workflow: 'STANDARD_REPORT', category: data.category },
+        });
 
-      return incident;
-    });
+        return incident;
+      });
+    } catch (err: any) {
+      if (
+        err?.code === 'P2002' ||
+        err?.message?.includes('idempotency_key') ||
+        err?.message?.includes('idempotencyKey')
+      ) {
+        const replayed = await this.prisma.incident.findUnique({
+          where: { idempotencyKey },
+        });
+        if (replayed) {
+          return {
+            incident: {
+              id: replayed.id,
+              public_id: replayed.publicId,
+              status: replayed.status,
+              workflow: replayed.workflow,
+            },
+            idempotency_replay: true,
+          };
+        }
+      }
+      throw err;
+    }
 
     // Enqueue
     try {
@@ -921,20 +973,224 @@ export class IncidentsService {
     return incident;
   }
 
+  async addFollowUpNote(incidentId: string, userId: string, note: string) {
+    const incident = await this.prisma.incident.findUnique({ where: { id: incidentId } });
+    if (!incident) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
+    }
+    if (incident.reporterId !== userId) {
+      throw new ForbiddenException({ code: 'FORBIDDEN', message: 'You can only add notes to your own incidents' });
+    }
+
+    const history = await this.prisma.incidentStatusHistory.create({
+      data: {
+        incidentId,
+        fromStatus: incident.status,
+        toStatus: incident.status,
+        changedBy: userId,
+        note: `[Student Follow-up Note]: ${note}`,
+      },
+    });
+
+    await this.auditService.log({
+      eventType: 'ACCESS_EVENT',
+      incidentId,
+      actorUserId: userId,
+      actorKind: 'USER',
+      details: { action: 'ADD_STUDENT_NOTE', note },
+    });
+
+    return { added: true, id: history.id };
+  }
+
   async addTeamNote(incidentId: string, userId: string, note: string) {
     const incident = await this.prisma.incident.findUnique({ where: { id: incidentId } });
     if (!incident) {
       throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
     }
 
+    const history = await this.prisma.incidentStatusHistory.create({
+      data: {
+        incidentId,
+        fromStatus: incident.status,
+        toStatus: incident.status,
+        changedBy: userId,
+        note: `[Team Note]: ${note}`,
+      },
+    });
+
     await this.auditService.log({
-      eventType: 'NOTE_ADDED',
+      eventType: 'ACCESS_EVENT',
       incidentId,
       actorUserId: userId,
       actorKind: 'USER',
-      details: { note },
+      details: { action: 'ADD_TEAM_NOTE', note },
     });
 
-    return { added: true, incident_id: incidentId };
+    return { added: true, id: history.id, incident_id: incidentId };
+  }
+
+  async escalateIncident(incidentId: string, user: any) {
+    const incident = await this.prisma.incident.findUnique({ where: { id: incidentId } });
+    if (!incident) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
+    }
+
+    await this.auditService.log({
+      eventType: 'ESCALATED',
+      incidentId,
+      actorUserId: user.id,
+      actorKind: 'USER',
+      details: { escalatedBy: user.email, role: user.role },
+    });
+
+    // Notify campus admin
+    const admins = await this.prisma.user.findMany({
+      where: { role: 'CAMPUS_ADMIN', isActive: true },
+      select: { id: true },
+    });
+    for (const admin of admins) {
+      await this.prisma.notification.create({
+        data: {
+          recipientUserId: admin.id,
+          recipientId: admin.id,
+          incidentId,
+          audienceType: 'ACT',
+          channel: 'IN_APP',
+          deliveryStatus: 'DELIVERED',
+          title: `Incident Escalation Alert: ${incident.publicId}`,
+          body: `Incident ${incident.publicId} has been escalated by ${user.fullName || user.email}. Immediate review requested.`,
+        },
+      }).catch(() => null);
+    }
+
+    return { escalated: true, incident_id: incidentId };
+  }
+
+  async adminAssign(incidentId: string, adminUserId: string, teamId: string, memberId?: string) {
+    const incident = await this.prisma.incident.findUnique({ where: { id: incidentId } });
+    if (!incident) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
+    }
+
+    await this.prisma.$transaction(async (tx: any) => {
+      const existing = await tx.incidentTeam.findFirst({
+        where: { incidentId, teamId },
+      });
+      if (!existing) {
+        await tx.incidentTeam.create({
+          data: {
+            incidentId,
+            teamId,
+            role: 'ACT',
+          },
+        });
+      }
+
+      if (memberId) {
+        let targetMemberId = memberId;
+        const tm = await tx.teamMember.findFirst({
+          where: {
+            OR: [
+              { id: memberId },
+              { userId: memberId, teamId },
+            ],
+          },
+        });
+        if (tm) {
+          targetMemberId = tm.id;
+        }
+
+        await tx.assignment.create({
+          data: {
+            incidentId,
+            teamId,
+            memberId: targetMemberId,
+            status: 'OFFERED',
+            offeredAt: new Date(),
+            expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+            slotNo: 1,
+            attemptNo: 1,
+          },
+        });
+        await tx.incident.update({
+          where: { id: incidentId },
+          data: { status: 'RESPONDER_ASSIGNED' },
+        });
+      }
+
+      await tx.incidentStatusHistory.create({
+        data: {
+          incidentId,
+          fromStatus: incident.status,
+          toStatus: memberId ? 'RESPONDER_ASSIGNED' : incident.status,
+          changedBy: adminUserId,
+          note: `Admin assigned to team ${teamId}${memberId ? ` (member: ${memberId})` : ''}`,
+        },
+      });
+    });
+
+    await this.auditService.log({
+      eventType: 'ADMIN_ACTION',
+      incidentId,
+      actorUserId: adminUserId,
+      actorKind: 'USER',
+      details: { action: 'ASSIGN', teamId, memberId },
+    });
+
+    return { assigned: true, incident_id: incidentId };
+  }
+
+  async adminReclassify(incidentId: string, adminUserId: string, newCategory: string) {
+    const incident = await this.prisma.incident.findUnique({ where: { id: incidentId } });
+    if (!incident) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Incident not found' });
+    }
+
+    const isRestricted = ['WOMEN_HARASSMENT', 'MEN_HARASSMENT', 'FACULTY_STAFF_MISCONDUCT'].includes(newCategory);
+    await this.prisma.incident.update({
+      where: { id: incidentId },
+      data: {
+        finalCategory: newCategory,
+        isRestricted,
+      },
+    });
+
+    await this.auditService.log({
+      eventType: 'ADMIN_ACTION',
+      incidentId,
+      actorUserId: adminUserId,
+      actorKind: 'USER',
+      details: { action: 'RECLASSIFY', fromCategory: incident.finalCategory, toCategory: newCategory },
+    });
+
+    return { reclassified: true, category: newCategory };
+  }
+
+  async updateDraft(draftId: string, userId: string, payload: any) {
+    const draft = await this.prisma.incidentDraft.findFirst({
+      where: { id: draftId, reporterId: userId },
+    });
+    if (!draft) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Draft not found' });
+    }
+    const updated = await this.prisma.incidentDraft.update({
+      where: { id: draftId },
+      data: { payload: { ...(draft.payload as any), ...payload } },
+    });
+    return { updated: true, draft_id: updated.id };
+  }
+
+  async deleteDraft(draftId: string, userId: string) {
+    const draft = await this.prisma.incidentDraft.findFirst({
+      where: { id: draftId, reporterId: userId },
+    });
+    if (!draft) {
+      throw new NotFoundException({ code: 'NOT_FOUND', message: 'Draft not found' });
+    }
+    await this.prisma.incidentDraft.delete({
+      where: { id: draftId },
+    });
+    return { deleted: true, draft_id: draftId };
   }
 }

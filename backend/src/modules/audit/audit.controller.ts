@@ -1,6 +1,7 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Query, Param } from '@nestjs/common';
 import { AuditService } from './audit.service';
-import { Roles } from '../../common/decorators';
+import { Roles, CurrentUser } from '../../common/decorators';
+import { AuthUser } from '../../common/guards/jwt-auth.guard';
 
 @Controller()
 export class AuditController {
@@ -33,7 +34,10 @@ export class AuditController {
   }
 
   @Get('incidents/:id/timeline')
-  async getIncidentTimeline(@Query('id') incidentId: string) {
-    return this.auditService.getIncidentAudit(incidentId);
+  async getIncidentTimeline(
+    @Param('id') incidentId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.auditService.getIncidentAudit(incidentId, user);
   }
 }
